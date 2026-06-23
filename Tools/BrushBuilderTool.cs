@@ -1,0 +1,520 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.Composition;
+using System.Drawing;
+using System.Linq;
+using System.Numerics;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using LogicAndTrick.Oy;
+using Sledge.BspEditor.Documents;
+using Sledge.BspEditor.Primitives.MapObjects;
+using Sledge.BspEditor.Rendering.Viewport;
+using Sledge.BspEditor.Tools;
+using Sledge.Common.Shell.Components;
+using Sledge.Common.Shell.Hotkeys;
+using Sledge.DataStructures.Geometric;
+using Sledge.Rendering.Cameras;
+using Sledge.Rendering.Pipelines;
+using Sledge.Rendering.Primitives;
+using Sledge.Rendering.Resources;
+using Face = Sledge.BspEditor.Primitives.MapObjectData.Face;
+
+namespace HammerTime.BrushBuilder.Tools
+{
+    [Export(typeof(ITool))]
+    [Export]
+    [OrderHint("ZZ")]
+    [DefaultHotkey("Shift+B")]
+    public class BrushBuilderTool : BaseTool
+    {
+        public List<(Face Face, Solid Solid, IMapObject Object)> SelectedFaces { get; } = new();
+
+        public int AlignmentShiftOffset { get; set; } = 0;
+
+        private readonly List<WeakReference<MapViewport>> _viewports = new();
+
+        private void AddViewport(MapViewport vp)
+        {
+            if (vp == null) return;
+            if (!_viewports.Any(w => w.TryGetTarget(out var v) && v == vp))
+            {
+                _viewports.Add(new WeakReference<MapViewport>(vp));
+            }
+        }
+
+        public void InvalidateViewports()
+        {
+            foreach (var wr in _viewports)
+            {
+                if (wr.TryGetTarget(out var vp) && vp.Control != null && !vp.Control.IsDisposed)
+                {
+                    vp.Control.Invalidate();
+                }
+            }
+        }
+
+        public Face? HoverFace { get; set; }
+
+        private bool _showHoverHelper = true;
+        public bool ShowHoverHelper
+        {
+            get => _showHoverHelper;
+            set
+            {
+                _showHoverHelper = value;
+                if (!_showHoverHelper)
+                {
+                    HoverFace = null;
+                }
+                InvalidateViewports();
+            }
+        }
+
+        private UI.BrushBuilderWindow _window;
+
+        public BrushBuilderTool()
+        {
+            Usage = ToolUsage.View3D;
+            _window = new UI.BrushBuilderWindow(this);
+            Oy.Subscribe<MapViewport>("MapViewport:Created", vp => AddViewport(vp));
+        }
+
+        public override async Task ToolSelected()
+        {
+            var parent = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f.GetType().Name == "Shell") ?? Form.ActiveForm;
+            if (parent != null)
+            {
+                _window.Owner = parent;
+            }
+            _window.Show();
+            await base.ToolSelected();
+        }
+
+        public override async Task ToolDeselected()
+        {
+            _window.Hide();
+            ClearSelection();
+            await base.ToolDeselected();
+        }
+
+        public void ClearSelection()
+        {
+            SelectedFaces.Clear();
+            HoverFace = null;
+        }
+
+        public override Image GetIcon()
+        {
+            try
+            {
+                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                var resourceName = "HammerTime.BrushBuilder.Resources.Tool_BrushBuilder.png";
+                using (var stream = assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (stream != null)
+                    {
+                        using (var original = Image.FromStream(stream))
+                        {
+                            var resized = new Bitmap(32, 32);
+                            using (var g = Graphics.FromImage(resized))
+                            {
+                                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                g.DrawImage(original, 0, 0, 32, 32);
+                            }
+                            return resized;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback to default system application icon
+            }
+            return SystemIcons.Application.ToBitmap();
+        }
+
+        public override string GetName()
+        {
+            return "Brush Builder";
+        }
+
+        private static (Face Face, Solid Solid)? RaycastFace(MapDocument document, PerspectiveCamera camera, int x, int y)
+        {
+            var (start, end) = camera.CastRayFromScreen(new Vector3(x, y, 0));
+            var ray = new Line(start, end);
+
+            var hit = document.Map.Root.GetBoudingBoxIntersectionsForVisibleObjects(ray)
+                .OfType<Solid>()
+                .Where(s => !s.IsHidden())
+                .SelectMany(a => a.Faces.Select(f => new { Face = f, Solid = a }))
+                .Select(x => new { x.Face, x.Solid, Intersection = new Polygon(x.Face.Vertices).GetIntersectionPoint(ray) })
+                .Where(x => x.Intersection != null)
+                .OrderBy(x => (x.Intersection.GetValueOrDefault() - ray.Start).Length())
+                .FirstOrDefault();
+
+            return hit == null ? null : (hit.Face, hit.Solid);
+        }
+
+        protected override void MouseMove(MapDocument document, MapViewport viewport, PerspectiveCamera camera, ViewportEvent e)
+        {
+            if (viewport == null) return;
+            AddViewport(viewport);
+            if (e.Dragging) return;
+
+            if (!ShowHoverHelper)
+            {
+                if (HoverFace != null)
+                {
+                    HoverFace = null;
+                    viewport.Control.Invalidate();
+                }
+                return;
+            }
+
+            var hit = RaycastFace(document, camera, e.X, e.Y);
+            var newHover = hit?.Face;
+            if (newHover != HoverFace)
+            {
+                HoverFace = newHover;
+                viewport.Control.Invalidate();
+            }
+        }
+
+        protected override void MouseLeave(MapDocument document, MapViewport viewport, PerspectiveCamera camera, ViewportEvent e)
+        {
+            if (viewport == null) return;
+            AddViewport(viewport);
+            if (HoverFace != null)
+            {
+                HoverFace = null;
+                viewport.Control.Invalidate();
+            }
+        }
+
+        protected override void MouseDown(MapDocument document, MapViewport viewport, PerspectiveCamera camera, ViewportEvent e)
+        {
+            if (viewport == null || e.Button != MouseButtons.Left) return;
+            AddViewport(viewport);
+
+            var hit = RaycastFace(document, camera, e.X, e.Y);
+            bool isCtrl = (Control.ModifierKeys & Keys.Control) == Keys.Control;
+            bool isShift = (Control.ModifierKeys & Keys.Shift) == Keys.Shift;
+            bool isMultiSelect = isCtrl || isShift;
+
+            if (hit == null)
+            {
+                SelectedFaces.Clear();
+                viewport.Control.Invalidate();
+                return;
+            }
+
+            IMapObject resolvedObject = hit.Value.Solid;
+            while (resolvedObject.Hierarchy.Parent != null && !(resolvedObject.Hierarchy.Parent is Root))
+            {
+                resolvedObject = resolvedObject.Hierarchy.Parent;
+            }
+
+            var newFace = hit.Value.Face;
+
+            if (isMultiSelect)
+            {
+                int index = SelectedFaces.FindIndex(x => x.Face == newFace);
+                if (index >= 0)
+                {
+                    SelectedFaces.RemoveAt(index);
+                }
+                else
+                {
+                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject));
+                }
+            }
+            else
+            {
+                if (SelectedFaces.Count == 0)
+                {
+                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject));
+                }
+                else if (SelectedFaces[0].Face == newFace)
+                {
+                    SelectedFaces.RemoveAt(0);
+                }
+                else
+                {
+                    SelectedFaces.Clear();
+                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject));
+                }
+            }
+            viewport.Control.Invalidate();
+        }
+
+        private void RefreshReferences(MapDocument document)
+        {
+            for (int i = SelectedFaces.Count - 1; i >= 0; i--)
+            {
+                var entry = SelectedFaces[i];
+                var currentObj = document.Map.Root.FindByID(entry.Object.ID);
+                if (currentObj == null)
+                {
+                    SelectedFaces.RemoveAt(i);
+                    continue;
+                }
+                var currentSolid = document.Map.Root.FindByID(entry.Solid.ID) as Solid;
+                if (currentSolid == null)
+                {
+                    SelectedFaces.RemoveAt(i);
+                    continue;
+                }
+                var currentFace = currentSolid.Faces.FirstOrDefault(f => f.ID == entry.Face.ID);
+                if (currentFace == null)
+                {
+                    SelectedFaces.RemoveAt(i);
+                    continue;
+                }
+                SelectedFaces[i] = (currentFace, currentSolid, currentObj);
+            }
+        }
+
+        protected override void Render(MapDocument document, BufferBuilder builder, Sledge.BspEditor.Rendering.Resources.ResourceCollector resourceCollector)
+        {
+            base.Render(document, builder, resourceCollector);
+            RefreshReferences(document);
+
+            var verts = new List<VertexStandard>();
+            var indices = new List<uint>();
+            var groups = new List<BufferGroup>();
+
+            // Hover Face (Yellow)
+            if (ShowHoverHelper && HoverFace != null && !SelectedFaces.Any(x => x.Face == HoverFace))
+            {
+                var colour = Color.FromArgb(40, Color.Gold).ToVector4();
+                RenderFace(HoverFace, colour, verts, indices, groups);
+            }
+
+            // Face 3+ (Coral/Orange clip constraints)
+            for (int i = 2; i < SelectedFaces.Count; i++)
+            {
+                var colour = Color.FromArgb(64, Color.Coral).ToVector4();
+                RenderFace(SelectedFaces[i].Face, colour, verts, indices, groups);
+            }
+
+            if (SelectedFaces.Count >= 2)
+            {
+                var faceA = SelectedFaces[0].Face;
+                var faceB = SelectedFaces[1].Face;
+
+                string sizeMode = _window.SelectedSizeMode;
+                string alignment = _window.SelectedAlignment;
+                string depth = _window.SelectedDepth;
+                float offsetA = _window.SelectedOffsetA;
+                bool usePercentageOffsetA = _window.SelectedUsePercentageOffsetA;
+                float offsetB = _window.SelectedOffsetB;
+                bool usePercentageOffsetB = _window.SelectedUsePercentageOffsetB;
+                float thickness = _window.SelectedThickness;
+                bool usePercentageThick = _window.SelectedUsePercentageThick;
+                int alignmentShiftOffset = AlignmentShiftOffset;
+
+                var caps = Operations.BuildBrushOperation.GetCaps(
+                    faceA, faceB,
+                    sizeMode,
+                    alignment,
+                    depth,
+                    offsetA, offsetB,
+                    usePercentageOffsetA, usePercentageOffsetB,
+                    thickness, usePercentageThick,
+                    _window.SelectedCopySide,
+                    alignmentShiftOffset,
+                    enableLogging: false
+                );
+
+                if (caps != null)
+                {
+                    var capA = caps.Value.CapA;
+                    var capB = caps.Value.CapB;
+
+                    bool isValid = Operations.BuildBrushOperation.ValidateGeometry(capA, capB, out _);
+
+                    var colourA = isValid 
+                        ? Color.FromArgb(64, Color.DeepSkyBlue).ToVector4() 
+                        : Color.FromArgb(128, Color.Red).ToVector4();
+                    RenderCap(capA, faceA.Plane.Normal, colourA, verts, indices, groups);
+
+                    var colourB = isValid 
+                        ? Color.FromArgb(64, Color.LimeGreen).ToVector4() 
+                        : Color.FromArgb(128, Color.Red).ToVector4();
+                    RenderCap(capB, faceB.Plane.Normal, colourB, verts, indices, groups);
+
+                    // Render connecting wireframe lines (Red if invalid, Gold if valid)
+                    int n = capA.Count;
+                    var lineIndOffs = (uint)indices.Count;
+                    var lineOffs = (uint)verts.Count;
+                    var lineColor = isValid ? Color.Gold.ToVector4() : Color.Red.ToVector4();
+
+                    var normalOffsetA = faceA.Plane.Normal * 0.2f;
+                    var normalOffsetB = faceB.Plane.Normal * 0.2f;
+
+                    // Add verts A
+                    for (int idx = 0; idx < n; idx++)
+                    {
+                        verts.Add(new VertexStandard
+                        {
+                            Position = capA[idx] + normalOffsetA,
+                            Colour = lineColor,
+                            Tint = Vector4.One
+                        });
+                    }
+
+                    // Add verts B
+                    for (int idx = 0; idx < n; idx++)
+                    {
+                        verts.Add(new VertexStandard
+                        {
+                            Position = capB[idx] + normalOffsetB,
+                            Colour = lineColor,
+                            Tint = Vector4.One
+                        });
+                    }
+
+                    // Index connections (lines)
+                    for (int idx = 0; idx < n; idx++)
+                    {
+                        indices.Add((uint)(lineOffs + idx));
+                        indices.Add((uint)(lineOffs + n + idx));
+                    }
+
+                    groups.Add(new BufferGroup(PipelineType.Wireframe, CameraType.Perspective, faceA.Origin, lineIndOffs, (uint)(indices.Count - lineIndOffs)));
+                }
+                else
+                {
+                    var colourA = Color.FromArgb(128, Color.Red).ToVector4();
+                    RenderFace(faceA, colourA, verts, indices, groups);
+
+                    var colourB = Color.FromArgb(128, Color.Red).ToVector4();
+                    RenderFace(faceB, colourB, verts, indices, groups);
+                }
+            }
+            else if (SelectedFaces.Count == 1)
+            {
+                var colour = Color.FromArgb(64, Color.DeepSkyBlue).ToVector4();
+                RenderFace(SelectedFaces[0].Face, colour, verts, indices, groups);
+            }
+
+            if (verts.Count > 0)
+            {
+                builder.Append(verts, indices, groups);
+            }
+        }
+
+        private void RenderFace(Face face, Vector4 color, List<VertexStandard> verts, List<uint> indices, List<BufferGroup> groups)
+        {
+            if (face.Vertices.Count < 3) return;
+
+            var normalOffset = face.Plane.Normal * 0.2f;
+            var indOffs = (uint)indices.Count;
+            var offs = (uint)verts.Count;
+            var centroid = face.Origin + normalOffset;
+
+            verts.Add(new VertexStandard
+            {
+                Position = centroid,
+                Colour = Vector4.One,
+                Tint = color,
+                Flags = VertexFlags.FlatColour
+            });
+
+            verts.AddRange(face.Vertices.Select(x => new VertexStandard
+            {
+                Position = x + normalOffset,
+                Colour = Vector4.One,
+                Tint = color,
+                Flags = VertexFlags.FlatColour
+            }));
+
+            var vertCount = face.Vertices.Count;
+            for (uint i = 0; i < vertCount; i++)
+            {
+                indices.Add(offs);
+                indices.Add(offs + 1 + i);
+                indices.Add(offs + 1 + (i + 1) % (uint)vertCount);
+            }
+
+            groups.Add(new BufferGroup(PipelineType.TexturedAlpha, CameraType.Perspective, face.Origin, indOffs, (uint)(indices.Count - indOffs)));
+
+            // Wireframe Border
+            var wfIndOffs = (uint)indices.Count;
+            var wfOffs = (uint)verts.Count;
+            var outlineColour = new Vector4(color.X, color.Y, color.Z, 1f);
+
+            verts.AddRange(face.Vertices.Select(x => new VertexStandard
+            {
+                Position = x + normalOffset,
+                Colour = outlineColour,
+                Tint = Vector4.One
+            }));
+
+            for (var i = 0; i < vertCount; i++)
+            {
+                indices.Add(wfOffs + (uint)i);
+                indices.Add(wfOffs + (uint)((i + 1) % vertCount));
+            }
+
+            groups.Add(new BufferGroup(PipelineType.Wireframe, CameraType.Perspective, face.Origin, wfIndOffs, (uint)(indices.Count - wfIndOffs)));
+        }
+
+        private void RenderCap(List<Vector3> vertices, Vector3 normal, Vector4 color, List<VertexStandard> verts, List<uint> indices, List<BufferGroup> groups)
+        {
+            if (vertices.Count < 3) return;
+
+            var normalOffset = normal * 0.2f;
+            var indOffs = (uint)indices.Count;
+            var offs = (uint)verts.Count;
+            var centroid = (vertices.Aggregate(Vector3.Zero, (a, b) => a + b) / vertices.Count) + normalOffset;
+
+            verts.Add(new VertexStandard
+            {
+                Position = centroid,
+                Colour = Vector4.One,
+                Tint = color,
+                Flags = VertexFlags.FlatColour
+            });
+
+            verts.AddRange(vertices.Select(x => new VertexStandard
+            {
+                Position = x + normalOffset,
+                Colour = Vector4.One,
+                Tint = color,
+                Flags = VertexFlags.FlatColour
+            }));
+
+            var vertCount = vertices.Count;
+            for (uint i = 0; i < vertCount; i++)
+            {
+                indices.Add(offs);
+                indices.Add(offs + 1 + i);
+                indices.Add(offs + 1 + (i + 1) % (uint)vertCount);
+            }
+
+            groups.Add(new BufferGroup(PipelineType.TexturedAlpha, CameraType.Perspective, centroid, indOffs, (uint)(indices.Count - indOffs)));
+
+            // Wireframe Border
+            var wfIndOffs = (uint)indices.Count;
+            var wfOffs = (uint)verts.Count;
+            var outlineColour = new Vector4(color.X, color.Y, color.Z, 1f);
+
+            verts.AddRange(vertices.Select(x => new VertexStandard
+            {
+                Position = x + normalOffset,
+                Colour = outlineColour,
+                Tint = Vector4.One
+            }));
+
+            for (var i = 0; i < vertCount; i++)
+            {
+                indices.Add(wfOffs + (uint)i);
+                indices.Add(wfOffs + (uint)((i + 1) % vertCount));
+            }
+
+            groups.Add(new BufferGroup(PipelineType.Wireframe, CameraType.Perspective, centroid, wfIndOffs, (uint)(indices.Count - wfIndOffs)));
+        }
+    }
+}

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0-windows7.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>HammerTime.BrushBuilder</AssemblyName>
+    <RootNamespace>HammerTime.BrushBuilder</RootNamespace>
+    <Platforms>AnyCPU;x86;x64</Platforms>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LogicAndTrick.Oy" Version="1.2.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sledge.BspEditor\Sledge.BspEditor.csproj" Private="false" />
+    <ProjectReference Include="..\Sledge.BspEditor.Tools\Sledge.BspEditor.Tools.csproj" Private="false" />
+    <ProjectReference Include="..\Sledge.Common\Sledge.Common.csproj" Private="false" />
+    <ProjectReference Include="..\Sledge.DataStructures\Sledge.DataStructures.csproj" Private="false" />
+    <ProjectReference Include="..\Sledge.Shell\Sledge.Shell.csproj" Private="false" />
+    <ProjectReference Include="..\Sledge.Rendering\Sledge.Rendering.csproj" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\Tool_BrushBuilder.png" />
+  </ItemGroup>
+</Project>

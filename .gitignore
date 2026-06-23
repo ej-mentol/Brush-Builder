@@ -1,0 +1,6 @@
+# Ignore build outputs
+bin/
+obj/
+
+# Allow tracking only the plugin's README.md
+!README.md
