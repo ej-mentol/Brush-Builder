@@ -20,10 +20,336 @@ namespace HammerTime.BrushBuilder.Operations
     {
         public static Action<string>? OnLog { get; set; }
 
+        public sealed class GeneratedFaceGeometry
+        {
+            public GeneratedFaceGeometry(Face sourceFace, List<Vector3> vertices)
+            {
+                SourceFace = sourceFace;
+                Vertices = vertices;
+            }
+
+            public Face SourceFace { get; }
+            public List<Vector3> Vertices { get; }
+        }
+
+        public static bool TryCreateGeneratedFaces(
+            Face faceA,
+            IReadOnlyList<Face> otherFaces,
+            string sizeMode,
+            string alignment,
+            string depth,
+            float offsetA, float offsetB,
+            bool usePercentageOffsetA, bool usePercentageOffsetB,
+            float thickness, bool usePercentageThick,
+            string copySide,
+            int alignmentShiftOffset,
+            out List<GeneratedFaceGeometry> generatedFaces,
+            out string reason,
+            bool enableLogging = false
+        )
+        {
+            generatedFaces = new List<GeneratedFaceGeometry>();
+            reason = "";
+
+            if (otherFaces == null || otherFaces.Count == 0)
+            {
+                reason = "At least 2 faces must be selected.";
+                return false;
+            }
+
+            var faceB = otherFaces[0];
+            var caps = GetCaps(
+                faceA, faceB,
+                sizeMode,
+                alignment,
+                depth,
+                offsetA, offsetB,
+                usePercentageOffsetA, usePercentageOffsetB,
+                thickness, usePercentageThick,
+                copySide,
+                alignmentShiftOffset,
+                enableLogging
+            );
+
+            if (caps == null)
+            {
+                reason = "Could not compute cap geometry.";
+                return false;
+            }
+
+            return TryCreateGeneratedFacesFromCaps(faceA, faceB, otherFaces, null, caps.Value.CapA, caps.Value.CapB, generatedFaces, out reason, enableLogging);
+        }
+
+        private static bool TryCreateGeneratedFacesFromCaps(
+            Face faceA,
+            Face faceB,
+            IReadOnlyList<Face> otherFaces,
+            IReadOnlyList<Vector3>? otherHitPoints,
+            List<Vector3> capA,
+            List<Vector3> capB,
+            List<GeneratedFaceGeometry> generatedFaces,
+            out string reason,
+            bool enableLogging
+        )
+        {
+            reason = "";
+            generatedFaces.Clear();
+
+            if (capA.Count < 3 || capB.Count < 3 || capA.Count != capB.Count)
+            {
+                reason = "Generated caps are incomplete.";
+                return false;
+            }
+
+            int n = capA.Count;
+	    Vector3 solidCentroid = capA.Concat(capB).Aggregate(Vector3.Zero, (a, b) => a + b) / (capA.Count + capB.Count);            
+            Vector3 referenceCentroid = solidCentroid;
+
+            bool OrientOutward(List<Vector3> verts, out List<Vector3> oriented, out string orientReason)
+            {
+                oriented = verts;
+                orientReason = "";
+
+                if (!TryCreatePlane(verts[0], verts[1], verts[2], out var plane))
+                {
+                    orientReason = "Generated face is degenerate.";
+                    return false;
+                }
+
+                var faceCentroid = verts.Aggregate(Vector3.Zero, (a, b) => a + b) / verts.Count;
+                if (Vector3.Dot(plane.Normal, faceCentroid - referenceCentroid) < 0)
+                {
+                    oriented = new List<Vector3>(verts);
+                    oriented.Reverse();
+                }
+                return true;
+            }
+
+            bool AddGeneratedFace(Face sourceFace, List<Vector3> verts, out string addReason)
+            {
+                addReason = "";
+                if (!OrientOutward(verts, out var oriented, out var orientReason))
+                {
+                    addReason = orientReason;
+                    return false;
+                }
+                generatedFaces.Add(new GeneratedFaceGeometry(sourceFace, oriented));
+                return true;
+            }
+
+            if (otherFaces.Count <= 1)
+            {
+                if (!AddGeneratedFace(faceA, capA, out var addReason))
+                {
+                    reason = addReason;
+                    return false;
+                }
+                if (!AddGeneratedFace(faceB, capB, out addReason))
+                {
+                    reason = addReason;
+                    return false;
+                }
+
+                for (int i = 0; i < n; i++)
+                {
+                    var quad = new List<Vector3> { capA[i], capB[i], capB[(i + 1) % n], capA[(i + 1) % n] };
+                    if (!AddGeneratedFace(faceA, quad, out addReason))
+                    {
+                        reason = addReason;
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            var planes = new List<Plane>();
+
+            Vector3 centroidCapA = capA.Aggregate(Vector3.Zero, (a, b) => a + b) / capA.Count;
+            Vector3 centroidCapB = capB.Aggregate(Vector3.Zero, (a, b) => a + b) / capB.Count;
+            Vector3 connectionDelta = centroidCapB - centroidCapA;
+            Vector3 connectionDir = connectionDelta.Length() > 1e-3f ? Vector3.Normalize(connectionDelta) : Vector3.UnitZ;
+
+            if (!TryCreatePlane(capA[0], capA[1], capA[2], out var planeCapA))
+            {
+                reason = "Face 1 (Blue) generated cap is degenerate.";
+                return false;
+            }
+            if (!TryCreatePlane(capB[0], capB[1], capB[2], out var planeCapB))
+            {
+                reason = "Face 2 (Green) generated cap is degenerate.";
+                return false;
+            }
+
+            // Orient cap planes strictly along the connection span direction (outward from solid volume).
+            if (Vector3.Dot(planeCapA.Normal, connectionDir) > 0)
+            {
+                planeCapA = new Plane(-planeCapA.Normal, -planeCapA.DistanceFromOrigin);
+            }
+            if (Vector3.Dot(planeCapB.Normal, connectionDir) < 0)
+            {
+                planeCapB = new Plane(-planeCapB.Normal, -planeCapB.DistanceFromOrigin);
+            }
+
+            planes.Add(planeCapA);
+            planes.Add(planeCapB);
+
+            for (int i = 0; i < n; i++)
+            {
+                if (!TryCreatePlane(capA[i], capB[i], capB[(i + 1) % n], out var sidePlane))
+                {
+                    reason = $"Side face {i} is degenerate.";
+                    return false;
+                }
+
+                float eval = Vector3.Dot(sidePlane.Normal, solidCentroid) - sidePlane.DistanceFromOrigin;
+                if (eval > 0)
+                {
+                    sidePlane = new Plane(-sidePlane.Normal, -sidePlane.DistanceFromOrigin);
+                }
+                planes.Add(sidePlane);
+            }
+
+            for (int i = 1; i < otherFaces.Count; i++)
+            {
+                var p = otherFaces[i].Plane;
+                var hitPt = (otherHitPoints != null && i - 1 < otherHitPoints.Count)
+                    ? otherHitPoints[i - 1]
+                    : (faceA.Origin + faceB.Origin) / 2f;
+                float dot = Vector3.Dot(p.Normal, hitPt) - p.DistanceFromOrigin;
+                planes.Add(dot > 0 ? new Plane(-p.Normal, -p.DistanceFromOrigin) : p);
+            }
+
+            var filteredPlanes = new List<Plane>();
+            foreach (var p in planes)
+            {
+                int existingIdx = filteredPlanes.FindIndex(x => x.Normal.EquivalentTo(p.Normal, 0.001f));
+                if (existingIdx >= 0)
+                {
+                    if (p.DistanceFromOrigin < filteredPlanes[existingIdx].DistanceFromOrigin)
+                    {
+                        filteredPlanes[existingIdx] = p;
+                    }
+                }
+                else
+                {
+                    filteredPlanes.Add(p);
+                }
+            }
+            planes = filteredPlanes;
+
+            if (enableLogging)
+            {
+                OnLog?.Invoke($"Constructing Polyhedron from {planes.Count} planes:");
+                for (int i = 0; i < planes.Count; i++)
+                {
+                    OnLog?.Invoke($"  * Plane {i}: Normal={planes[i].Normal:F3}, Dist={planes[i].DistanceFromOrigin:F2}");
+                }
+            }
+
+            Polyhedron poly;
+            try
+            {
+                poly = new Polyhedron(planes);
+                if (enableLogging)
+                {
+                    OnLog?.Invoke($"Polyhedron constructed successfully. Polygons count: {poly.Polygons.Count}");
+                }
+            }
+            catch (Exception ex)
+            {
+                reason = $"Failed to compute polyhedron intersection: {ex.Message}";
+                if (enableLogging) OnLog?.Invoke($"[ERROR] {reason}");
+                return false;
+            }
+
+            if (!poly.IsValid() || poly.Polygons.Count < 4)
+            {
+                reason = "Clipped brush geometry is invalid or empty. The constraint planes might completely cut off the volume.";
+                return false;
+            }
+
+            var polyVerts = poly.Polygons.SelectMany(x => x.Vertices).ToList();
+            if (polyVerts.Count > 0)
+            {
+                referenceCentroid = polyVerts.Aggregate(Vector3.Zero, (a, b) => a + b) / polyVerts.Count;
+            }
+
+            static bool PlaneEquivalentRelaxed(Plane a, Plane b)
+            {
+                return a.Normal.EquivalentTo(b.Normal, 0.01f)
+                       && Math.Abs(a.DistanceFromOrigin - b.DistanceFromOrigin) < GeometryEpsilon;
+            }
+
+            static bool PlaneMatchesEitherDirection(Plane a, Plane b)
+            {
+                return PlaneEquivalentRelaxed(a, b)
+                       || PlaneEquivalentRelaxed(a, new Plane(-b.Normal, -b.DistanceFromOrigin));
+            }
+
+            Face GetMatchingFaceTexture(Plane polyPlane)
+            {
+                if (PlaneMatchesEitherDirection(polyPlane, planeCapA)) return faceA;
+                if (PlaneMatchesEitherDirection(polyPlane, planeCapB)) return faceB;
+
+                for (int i = 1; i < otherFaces.Count; i++)
+                {
+                    var constraintFace = otherFaces[i];
+                    if (PlaneMatchesEitherDirection(polyPlane, constraintFace.Plane))
+                    {
+                        return constraintFace;
+                    }
+                }
+                return faceA;
+            }
+
+            var validPolygons = new List<Polygon>();
+            foreach (var polygon in poly.Polygons)
+            {
+                bool isPolygonValid = true;
+                foreach (var plane in planes)
+                {
+                    foreach (var vert in polygon.Vertices)
+                    {
+                        float dist = Vector3.Dot(plane.Normal, vert) - plane.DistanceFromOrigin;
+                        if (dist > GeometryEpsilon)
+                        {
+                            isPolygonValid = false;
+                            break;
+                        }
+                    }
+                    if (!isPolygonValid) break;
+                }
+                if (isPolygonValid)
+                {
+                    validPolygons.Add(polygon);
+                }
+            }
+
+            if (validPolygons.Count < 4)
+            {
+                reason = "Clipped brush geometry is invalid or empty after filtering out-of-bounds polygons.";
+                return false;
+            }
+
+            foreach (var polygon in validPolygons)
+            {
+                var sourceFace = GetMatchingFaceTexture(polygon.Plane);
+                if (!AddGeneratedFace(sourceFace, polygon.Vertices.ToList(), out var addReason))
+                {
+                    reason = addReason;
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         public static IOperation? Create(
             MapDocument doc,
             Face face1, Solid solid1,
             IReadOnlyList<Face> otherFaces,
+            IReadOnlyList<Vector3> otherHitPoints,
             string sizeMode,
             string alignment,
             string depth,
@@ -86,216 +412,28 @@ namespace HammerTime.BrushBuilder.Operations
             var capA = caps.Value.CapA;
             var capB = caps.Value.CapB;
             n = capA.Count;
-            hadFewerThanThreeVertices = (faceA.Vertices.Count < 3 || faceB.Vertices.Count < 3);
 
             // Assemble Sledge Solid Primitives
             var solidId = doc.Map.NumberGenerator.Next("MapObject");
             Solid newSolid = new Solid(solidId);
             newSolid.Data.Add(new ObjectColor(Sledge.Common.Colour.GetRandomBrushColour()));
 
-            Vector3 solidCentroid = capA.Concat(capB).Aggregate(Vector3.Zero, (a, b) => a + b) / (capA.Count + capB.Count);
-            Vector3 referenceCentroid = solidCentroid;
-
-            // Reverses a face's winding if its computed normal points into the new solid instead of away from it.
-            List<Vector3> OrientOutward(List<Vector3> verts)
+            var generatedFaces = new List<GeneratedFaceGeometry>();
+            if (!TryCreateGeneratedFacesFromCaps(faceA, faceB, otherFaces, otherHitPoints, capA, capB, generatedFaces, out var geometryReason, enableLogging: true))
             {
-                var faceCentroid = verts.Aggregate(Vector3.Zero, (a, b) => a + b) / verts.Count;
-                var plane = new Plane(verts[0], verts[1], verts[2]);
-                if (Vector3.Dot(plane.Normal, faceCentroid - referenceCentroid) < 0)
-                {
-                    var reversed = new List<Vector3>(verts);
-                    reversed.Reverse();
-                    return reversed;
-                }
-                return verts;
+                OnLog?.Invoke($"[ERROR] {geometryReason}");
+                MessageBox.Show(geometryReason, "Geometry Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return null;
             }
 
-            if (otherFaces.Count > 1)
+            foreach (var generatedFace in generatedFaces)
             {
-                var planes = new List<Plane>();
-
-                Vector3 centroidCapA = capA.Aggregate(Vector3.Zero, (a, b) => a + b) / capA.Count;
-                Vector3 centroidCapB = capB.Aggregate(Vector3.Zero, (a, b) => a + b) / capB.Count;
-                Vector3 connectionDelta = centroidCapB - centroidCapA;
-                Vector3 connectionDir = connectionDelta.Length() > 1e-3f ? Vector3.Normalize(connectionDelta) : Vector3.UnitZ;
-
-                var planeCapA = new Plane(capA[0], capA[1], capA[2]);
-                var planeCapB = new Plane(capB[0], capB[1], capB[2]);
-
-                // Orient cap planes strictly along the connection span direction (outward from solid volume)
-                if (Vector3.Dot(planeCapA.Normal, connectionDir) > 0)
-                {
-                    planeCapA = new Plane(-planeCapA.Normal, -planeCapA.DistanceFromOrigin);
-                }
-                if (Vector3.Dot(planeCapB.Normal, connectionDir) < 0)
-                {
-                    planeCapB = new Plane(-planeCapB.Normal, -planeCapB.DistanceFromOrigin);
-                }
-
-                planes.Add(planeCapA);
-                planes.Add(planeCapB);
-
-                // Orient side planes outward from the original solidCentroid
-                for (int i = 0; i < n; i++)
-                {
-                    var sidePlane = new Plane(capA[i], capB[i], capB[(i + 1) % n]);
-                    float eval = Vector3.Dot(sidePlane.Normal, solidCentroid) - sidePlane.DistanceFromOrigin;
-                    if (eval > 0)
-                    {
-                        sidePlane = new Plane(-sidePlane.Normal, -sidePlane.DistanceFromOrigin);
-                    }
-                    planes.Add(sidePlane);
-                }
-
-                for (int i = 1; i < otherFaces.Count; i++)
-                {
-                    var p = otherFaces[i].Plane;
-                    planes.Add(new Plane(-p.Normal, -p.DistanceFromOrigin)); // Invert constraint planes because they belong to existing solids
-                }
-
-                // Filter out parallel planes pointing in the same direction, keeping the tighter constraint
-                var filteredPlanes = new List<Plane>();
-                foreach (var p in planes)
-                {
-                    int existingIdx = filteredPlanes.FindIndex(x => x.Normal.EquivalentTo(p.Normal, 0.001f));
-                    if (existingIdx >= 0)
-                    {
-                        if (p.DistanceFromOrigin < filteredPlanes[existingIdx].DistanceFromOrigin)
-                        {
-                            filteredPlanes[existingIdx] = p;
-                        }
-                    }
-                    else
-                    {
-                        filteredPlanes.Add(p);
-                    }
-                }
-                planes = filteredPlanes;
-
-                OnLog?.Invoke($"Constructing Polyhedron from {planes.Count} planes:");
-                for (int i = 0; i < planes.Count; i++)
-                {
-                    OnLog?.Invoke($"  * Plane {i}: Normal={planes[i].Normal:F3}, Dist={planes[i].DistanceFromOrigin:F2}");
-                }
-
-                Polyhedron poly;
-                try
-                {
-                    poly = new Polyhedron(planes);
-                    OnLog?.Invoke($"Polyhedron constructed successfully. Polygons count: {poly.Polygons.Count}");
-                }
-                catch (Exception ex)
-                {
-                    OnLog?.Invoke($"[ERROR] Polyhedron construction failed: {ex.Message}");
-                    MessageBox.Show($"Failed to compute polyhedron intersection: {ex.Message}", "Geometry Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return null;
-                }
-
-                if (!poly.IsValid() || poly.Polygons.Count < 4)
-                {
-                    MessageBox.Show("Clipped brush geometry is invalid or empty. The constraint planes might completely cut off the volume.", "Geometry Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return null;
-                }
-
-                var polyVerts = poly.Polygons.SelectMany(x => x.Vertices).ToList();
-                if (polyVerts.Count > 0)
-                {
-                    referenceCentroid = polyVerts.Aggregate(Vector3.Zero, (a, b) => a + b) / polyVerts.Count;
-                }
-
-                Face GetMatchingFaceTexture(Plane polyPlane)
-                {
-                    if (polyPlane.EquivalentTo(planeCapA) || polyPlane.EquivalentTo(new Plane(-planeCapA.Normal, -planeCapA.DistanceFromOrigin)))
-                    {
-                        return faceA;
-                    }
-                    if (polyPlane.EquivalentTo(planeCapB) || polyPlane.EquivalentTo(new Plane(-planeCapB.Normal, -planeCapB.DistanceFromOrigin)))
-                    {
-                        return faceB;
-                    }
-                    for (int i = 1; i < otherFaces.Count; i++)
-                    {
-                        var constraintFace = otherFaces[i];
-                        if (polyPlane.EquivalentTo(constraintFace.Plane) || polyPlane.EquivalentTo(new Plane(-constraintFace.Plane.Normal, -constraintFace.Plane.DistanceFromOrigin)))
-                        {
-                            return constraintFace;
-                        }
-                    }
-                    return faceA;
-                }
-
-                var validPolygons = new List<Polygon>();
-                foreach (var polygon in poly.Polygons)
-                {
-                    bool isPolygonValid = true;
-                    foreach (var plane in planes)
-                    {
-                        foreach (var vert in polygon.Vertices)
-                        {
-                            float dist = Vector3.Dot(plane.Normal, vert) - plane.DistanceFromOrigin;
-                            if (dist > 0.5f)
-                            {
-                                isPolygonValid = false;
-                                break;
-                            }
-                        }
-                        if (!isPolygonValid) break;
-                    }
-                    if (isPolygonValid)
-                    {
-                        validPolygons.Add(polygon);
-                    }
-                }
-
-                if (validPolygons.Count < 4)
-                {
-                    MessageBox.Show("Clipped brush geometry is invalid or empty after filtering out-of-bounds polygons.", "Geometry Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return null;
-                }
-
-                foreach (var polygon in validPolygons)
-                {
-                    var matchingFace = GetMatchingFaceTexture(polygon.Plane);
-                    var newFaceId = doc.Map.NumberGenerator.Next("Face");
-                    Face newFace = new Face(newFaceId);
-                    newFace.Texture = matchingFace.Texture.Clone();
-                    newFace.Vertices.AddRange(OrientOutward(polygon.Vertices.ToList()));
-                    newFace.Texture.AlignToNormal(newFace.Plane.Normal);
-                    newSolid.Data.Add(newFace);
-                }
-            }
-            else
-            {
-                // Cap A Face
-                var faceAId = doc.Map.NumberGenerator.Next("Face");
-                Face newFaceA = new Face(faceAId);
-                newFaceA.Texture = faceA.Texture.Clone();
-                newFaceA.Vertices.AddRange(OrientOutward(capA));
-                newFaceA.Texture.AlignToNormal(newFaceA.Plane.Normal);
-
-                // Cap B Face
-                var faceBId = doc.Map.NumberGenerator.Next("Face");
-                Face newFaceB = new Face(faceBId);
-                newFaceB.Texture = faceB.Texture.Clone();
-                newFaceB.Vertices.AddRange(OrientOutward(capB));
-                newFaceB.Texture.AlignToNormal(newFaceB.Plane.Normal);
-
-                newSolid.Data.Add(newFaceA);
-                newSolid.Data.Add(newFaceB);
-
-                // Side Faces (watertight quadrilaterals)
-                for (int i = 0; i < n; i++)
-                {
-                    var sideFaceId = doc.Map.NumberGenerator.Next("Face");
-                    Face sideFace = new Face(sideFaceId);
-                    sideFace.Texture = faceA.Texture.Clone();
-
-                    var quad = new List<Vector3> { capA[i], capB[i], capB[(i + 1) % n], capA[(i + 1) % n] };
-                    sideFace.Vertices.AddRange(OrientOutward(quad));
-
-                    sideFace.Texture.AlignToNormal(sideFace.Plane.Normal);
-                    newSolid.Data.Add(sideFace);
-                }
+                var newFaceId = doc.Map.NumberGenerator.Next("Face");
+                Face newFace = new Face(newFaceId);
+                newFace.Texture = generatedFace.SourceFace.Texture.Clone();
+                newFace.Vertices.AddRange(generatedFace.Vertices);
+                newFace.Texture.AlignToNormal(newFace.Plane.Normal);
+                newSolid.Data.Add(newFace);
             }
 
             // Geometry Validation
@@ -316,7 +454,7 @@ namespace HammerTime.BrushBuilder.Operations
             }
 
             string invalidReason = "";
-            bool isValid = ValidateGeometry(capA, capB, out invalidReason);
+            bool isValid = ValidateGeneratedFaces(generatedFaces.Select(x => (IReadOnlyList<Vector3>)x.Vertices).ToList(), out invalidReason);
 
             if (!isValid)
             {

@@ -1016,6 +1016,7 @@ namespace HammerTime.BrushBuilder.UI
                 var face1 = _tool.SelectedFaces[0].Face;
                 var solid1 = _tool.SelectedFaces[0].Solid;
                 var otherFaces = _tool.SelectedFaces.Skip(1).Select(x => x.Face).ToList();
+                var otherHitPoints = _tool.SelectedFaces.Skip(1).Select(x => x.HitPoint).ToList();
 
                 string copySide = SelectedCopySide;
 
@@ -1023,6 +1024,7 @@ namespace HammerTime.BrushBuilder.UI
                     doc,
                     face1, solid1,
                     otherFaces,
+                    otherHitPoints,
                     sizeMode,
                     alignment,
                     depth,

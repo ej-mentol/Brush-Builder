@@ -19,6 +19,7 @@ using Sledge.Rendering.Pipelines;
 using Sledge.Rendering.Primitives;
 using Sledge.Rendering.Resources;
 using Face = Sledge.BspEditor.Primitives.MapObjectData.Face;
+using Plane = Sledge.DataStructures.Geometric.Plane;
 
 namespace HammerTime.BrushBuilder.Tools
 {
@@ -28,7 +29,7 @@ namespace HammerTime.BrushBuilder.Tools
     [DefaultHotkey("Shift+B")]
     public class BrushBuilderTool : BaseTool
     {
-        public List<(Face Face, Solid Solid, IMapObject Object)> SelectedFaces { get; } = new();
+        public List<(Face Face, Solid Solid, IMapObject Object, Vector3 HitPoint)> SelectedFaces { get; } = new();
 
         public int AlignmentShiftOffset { get; set; } = 0;
 
@@ -139,7 +140,7 @@ namespace HammerTime.BrushBuilder.Tools
             return "Brush Builder";
         }
 
-        private static (Face Face, Solid Solid)? RaycastFace(MapDocument document, PerspectiveCamera camera, int x, int y)
+        private static (Face Face, Solid Solid, Vector3 HitPoint)? RaycastFace(MapDocument document, PerspectiveCamera camera, int x, int y)
         {
             var (start, end) = camera.CastRayFromScreen(new Vector3(x, y, 0));
             var ray = new Line(start, end);
@@ -153,7 +154,7 @@ namespace HammerTime.BrushBuilder.Tools
                 .OrderBy(x => (x.Intersection.GetValueOrDefault() - ray.Start).Length())
                 .FirstOrDefault();
 
-            return hit == null ? null : (hit.Face, hit.Solid);
+            return hit == null ? null : (hit.Face, hit.Solid, hit.Intersection.GetValueOrDefault());
         }
 
         protected override void MouseMove(MapDocument document, MapViewport viewport, PerspectiveCamera camera, ViewportEvent e)
@@ -216,6 +217,7 @@ namespace HammerTime.BrushBuilder.Tools
             }
 
             var newFace = hit.Value.Face;
+            var hitPoint = hit.Value.HitPoint;
 
             if (isMultiSelect)
             {
@@ -226,14 +228,14 @@ namespace HammerTime.BrushBuilder.Tools
                 }
                 else
                 {
-                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject));
+                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject, hitPoint));
                 }
             }
             else
             {
                 if (SelectedFaces.Count == 0)
                 {
-                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject));
+                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject, hitPoint));
                 }
                 else if (SelectedFaces[0].Face == newFace)
                 {
@@ -242,7 +244,7 @@ namespace HammerTime.BrushBuilder.Tools
                 else
                 {
                     SelectedFaces.Clear();
-                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject));
+                    SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject, hitPoint));
                 }
             }
             viewport.Control.Invalidate();
@@ -271,7 +273,7 @@ namespace HammerTime.BrushBuilder.Tools
                     SelectedFaces.RemoveAt(i);
                     continue;
                 }
-                SelectedFaces[i] = (currentFace, currentSolid, currentObj);
+                SelectedFaces[i] = (currentFace, currentSolid, currentObj, entry.HitPoint);
             }
         }
 
@@ -314,8 +316,10 @@ namespace HammerTime.BrushBuilder.Tools
                 bool usePercentageThick = _window.SelectedUsePercentageThick;
                 int alignmentShiftOffset = AlignmentShiftOffset;
 
-                var caps = Operations.BuildBrushOperation.GetCaps(
-                    faceA, faceB,
+                var otherFaces = SelectedFaces.Skip(1).Select(x => x.Face).ToList();
+                bool hasGeneratedGeometry = Operations.BuildBrushOperation.TryCreateGeneratedFaces(
+                    faceA,
+                    otherFaces,
                     sizeMode,
                     alignment,
                     depth,
@@ -324,65 +328,23 @@ namespace HammerTime.BrushBuilder.Tools
                     thickness, usePercentageThick,
                     _window.SelectedCopySide,
                     alignmentShiftOffset,
+                    out var generatedFaces,
+                    out _,
                     enableLogging: false
                 );
 
-                if (caps != null)
+                if (hasGeneratedGeometry)
                 {
-                    var capA = caps.Value.CapA;
-                    var capB = caps.Value.CapB;
+                    bool isValid = Operations.BuildBrushOperation.ValidateGeneratedFaces(
+                        generatedFaces.Select(x => (IReadOnlyList<Vector3>)x.Vertices).ToList(),
+                        out _);
 
-                    bool isValid = Operations.BuildBrushOperation.ValidateGeometry(capA, capB, out _);
-
-                    var colourA = isValid 
-                        ? Color.FromArgb(64, Color.DeepSkyBlue).ToVector4() 
-                        : Color.FromArgb(128, Color.Red).ToVector4();
-                    RenderCap(capA, faceA.Plane.Normal, colourA, verts, indices, groups);
-
-                    var colourB = isValid 
-                        ? Color.FromArgb(64, Color.LimeGreen).ToVector4() 
-                        : Color.FromArgb(128, Color.Red).ToVector4();
-                    RenderCap(capB, faceB.Plane.Normal, colourB, verts, indices, groups);
-
-                    // Render connecting wireframe lines (Red if invalid, Gold if valid)
-                    int n = capA.Count;
-                    var lineIndOffs = (uint)indices.Count;
-                    var lineOffs = (uint)verts.Count;
-                    var lineColor = isValid ? Color.Gold.ToVector4() : Color.Red.ToVector4();
-
-                    var normalOffsetA = faceA.Plane.Normal * 0.2f;
-                    var normalOffsetB = faceB.Plane.Normal * 0.2f;
-
-                    // Add verts A
-                    for (int idx = 0; idx < n; idx++)
+                    foreach (var generatedFace in generatedFaces)
                     {
-                        verts.Add(new VertexStandard
-                        {
-                            Position = capA[idx] + normalOffsetA,
-                            Colour = lineColor,
-                            Tint = Vector4.One
-                        });
+                        var colour = GetGeneratedFacePreviewColor(generatedFace.SourceFace, faceA, faceB, isValid);
+                        var normal = new Plane(generatedFace.Vertices[0], generatedFace.Vertices[1], generatedFace.Vertices[2]).Normal;
+                        RenderCap(generatedFace.Vertices, normal, colour, verts, indices, groups);
                     }
-
-                    // Add verts B
-                    for (int idx = 0; idx < n; idx++)
-                    {
-                        verts.Add(new VertexStandard
-                        {
-                            Position = capB[idx] + normalOffsetB,
-                            Colour = lineColor,
-                            Tint = Vector4.One
-                        });
-                    }
-
-                    // Index connections (lines)
-                    for (int idx = 0; idx < n; idx++)
-                    {
-                        indices.Add((uint)(lineOffs + idx));
-                        indices.Add((uint)(lineOffs + n + idx));
-                    }
-
-                    groups.Add(new BufferGroup(PipelineType.Wireframe, CameraType.Perspective, faceA.Origin, lineIndOffs, (uint)(indices.Count - lineIndOffs)));
                 }
                 else
                 {
@@ -403,6 +365,23 @@ namespace HammerTime.BrushBuilder.Tools
             {
                 builder.Append(verts, indices, groups);
             }
+        }
+
+        private static Vector4 GetGeneratedFacePreviewColor(Face sourceFace, Face faceA, Face faceB, bool isValid)
+        {
+            if (!isValid)
+            {
+                return Color.FromArgb(128, Color.Red).ToVector4();
+            }
+            if (sourceFace == faceA)
+            {
+                return Color.FromArgb(64, Color.DeepSkyBlue).ToVector4();
+            }
+            if (sourceFace == faceB)
+            {
+                return Color.FromArgb(64, Color.LimeGreen).ToVector4();
+            }
+            return Color.FromArgb(64, Color.Coral).ToVector4();
         }
 
         private void RenderFace(Face face, Vector4 color, List<VertexStandard> verts, List<uint> indices, List<BufferGroup> groups)
