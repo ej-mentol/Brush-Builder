@@ -95,6 +95,7 @@ namespace HammerTime.BrushBuilder.UI
             _cachedFaceIds.AddRange(_tool.SelectedFaces.Select(x => (long)x.Face.ID));
             _originalFaceIds.AddRange(_cachedFaceIds);
             InitializeComponent();
+            Operations.BuildBrushOperation.OnLog = AppendLog;
             LoadProfilesList();
 
             Oy.Subscribe<bool>("Theme:Changed", dark => {
@@ -1064,7 +1065,7 @@ namespace HammerTime.BrushBuilder.UI
             if (e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
-                this.Hide();
+                Oy.Publish("ActivateTool", "SelectTool");
             }
             base.OnFormClosing(e);
         }

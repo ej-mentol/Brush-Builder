@@ -45,7 +45,8 @@ namespace HammerTime.BrushBuilder.Operations
             int alignmentShiftOffset,
             out List<GeneratedFaceGeometry> generatedFaces,
             out string reason,
-            bool enableLogging = false
+            bool enableLogging = false,
+            IReadOnlyList<Vector3>? otherHitPoints = null
         )
         {
             generatedFaces = new List<GeneratedFaceGeometry>();
@@ -77,7 +78,7 @@ namespace HammerTime.BrushBuilder.Operations
                 return false;
             }
 
-            return TryCreateGeneratedFacesFromCaps(faceA, faceB, otherFaces, null, caps.Value.CapA, caps.Value.CapB, generatedFaces, out reason, enableLogging);
+            return TryCreateGeneratedFacesFromCaps(faceA, faceB, otherFaces, otherHitPoints, caps.Value.CapA, caps.Value.CapB, generatedFaces, out reason, enableLogging);
         }
 
         private static bool TryCreateGeneratedFacesFromCaps(
@@ -215,7 +216,7 @@ namespace HammerTime.BrushBuilder.Operations
                 var p = otherFaces[i].Plane;
                 var hitPt = (otherHitPoints != null && i - 1 < otherHitPoints.Count)
                     ? otherHitPoints[i - 1]
-                    : (faceA.Origin + faceB.Origin) / 2f;
+                    : solidCentroid;
                 float dot = Vector3.Dot(p.Normal, hitPt) - p.DistanceFromOrigin;
                 planes.Add(dot > 0 ? new Plane(-p.Normal, -p.DistanceFromOrigin) : p);
             }
@@ -240,6 +241,14 @@ namespace HammerTime.BrushBuilder.Operations
 
             if (enableLogging)
             {
+                if (otherHitPoints != null && otherHitPoints.Count > 0)
+                {
+                    OnLog?.Invoke($"Using {otherHitPoints.Count} hit points for constraint alignment:");
+                    for (int i = 0; i < otherHitPoints.Count; i++)
+                    {
+                        OnLog?.Invoke($"  * HitPoint {i}: {otherHitPoints[i]:F3}");
+                    }
+                }
                 OnLog?.Invoke($"Constructing Polyhedron from {planes.Count} planes:");
                 for (int i = 0; i < planes.Count; i++)
                 {

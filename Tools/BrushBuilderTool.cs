@@ -33,6 +33,8 @@ namespace HammerTime.BrushBuilder.Tools
 
         public int AlignmentShiftOffset { get; set; } = 0;
 
+        private string _lastPreviewLogState = "";
+
         private readonly List<WeakReference<MapViewport>> _viewports = new();
 
         private void AddViewport(MapViewport vp)
@@ -103,6 +105,8 @@ namespace HammerTime.BrushBuilder.Tools
         {
             SelectedFaces.Clear();
             HoverFace = null;
+            _lastPreviewLogState = "";
+            LogSelectionState();
         }
 
         public override Image GetIcon()
@@ -247,7 +251,36 @@ namespace HammerTime.BrushBuilder.Tools
                     SelectedFaces.Add((newFace, hit.Value.Solid, resolvedObject, hitPoint));
                 }
             }
+            LogSelectionState();
             viewport.Control.Invalidate();
+        }
+
+        private void LogSelectionState()
+        {
+            var logAction = Operations.BuildBrushOperation.OnLog;
+            if (logAction == null) return;
+
+            logAction($"[Viewport Click] Selected faces count: {SelectedFaces.Count}");
+            for (int i = 0; i < SelectedFaces.Count; i++)
+            {
+                var entry = SelectedFaces[i];
+                logAction($"  * Face {i + 1}: ID={entry.Face.ID}, Normal={entry.Face.Plane.Normal:F3}, HitPoint={entry.HitPoint:F1}");
+            }
+
+            if (SelectedFaces.Count > 0)
+            {
+                var min = SelectedFaces[0].HitPoint;
+                var max = SelectedFaces[0].HitPoint;
+                for (int i = 1; i < SelectedFaces.Count; i++)
+                {
+                    var pt = SelectedFaces[i].HitPoint;
+                    min = Vector3.Min(min, pt);
+                    max = Vector3.Max(max, pt);
+                }
+                var size = max - min;
+                float volume = Math.Abs(size.X * size.Y * size.Z);
+                logAction($"  * Gizmo (HitPoints) Bounds Size: X={size.X:F1}, Y={size.Y:F1}, Z={size.Z:F1} (Volume: {volume:F1})");
+            }
         }
 
         private void RefreshReferences(MapDocument document)
@@ -317,6 +350,8 @@ namespace HammerTime.BrushBuilder.Tools
                 int alignmentShiftOffset = AlignmentShiftOffset;
 
                 var otherFaces = SelectedFaces.Skip(1).Select(x => x.Face).ToList();
+                // Передаем список точек клика со Skip(1) для точной синхронизации с Create().
+                var otherHitPoints = SelectedFaces.Skip(1).Select(x => x.HitPoint).ToList();
                 bool hasGeneratedGeometry = Operations.BuildBrushOperation.TryCreateGeneratedFaces(
                     faceA,
                     otherFaces,
@@ -329,15 +364,46 @@ namespace HammerTime.BrushBuilder.Tools
                     _window.SelectedCopySide,
                     alignmentShiftOffset,
                     out var generatedFaces,
-                    out _,
-                    enableLogging: false
+                    out var previewReason,
+                    enableLogging: false,
+                    otherHitPoints: otherHitPoints
                 );
 
                 if (hasGeneratedGeometry)
                 {
                     bool isValid = Operations.BuildBrushOperation.ValidateGeneratedFaces(
                         generatedFaces.Select(x => (IReadOnlyList<Vector3>)x.Vertices).ToList(),
-                        out _);
+                        out var validationReason);
+
+                    var allVerts = generatedFaces.SelectMany(f => f.Vertices).ToList();
+                    string logState = "";
+                    if (allVerts.Count > 0)
+                    {
+                        var min = allVerts[0];
+                        var max = allVerts[0];
+                        foreach (var v in allVerts)
+                        {
+                            min = Vector3.Min(min, v);
+                            max = Vector3.Max(max, v);
+                        }
+                        var size = max - min;
+                        float volume = Math.Abs(size.X * size.Y * size.Z);
+                        logState = $"Bounds Size: X={size.X:F1}, Y={size.Y:F1}, Z={size.Z:F1} (Volume: {volume:F1}), Faces: {generatedFaces.Count}, Valid: {isValid}";
+                    }
+                    else
+                    {
+                        logState = "No vertices generated";
+                    }
+
+                    if (logState != _lastPreviewLogState)
+                    {
+                        _lastPreviewLogState = logState;
+                        Operations.BuildBrushOperation.OnLog?.Invoke($"[Preview Render] {logState}");
+                        if (!isValid && !string.IsNullOrEmpty(validationReason))
+                        {
+                            Operations.BuildBrushOperation.OnLog?.Invoke($"  * Preview Validation warning: {validationReason}");
+                        }
+                    }
 
                     foreach (var generatedFace in generatedFaces)
                     {
@@ -348,6 +414,13 @@ namespace HammerTime.BrushBuilder.Tools
                 }
                 else
                 {
+                    string logState = $"Preview Geometry calculation failed: {previewReason}";
+                    if (logState != _lastPreviewLogState)
+                    {
+                        _lastPreviewLogState = logState;
+                        Operations.BuildBrushOperation.OnLog?.Invoke($"[Preview Render] {logState}");
+                    }
+
                     var colourA = Color.FromArgb(128, Color.Red).ToVector4();
                     RenderFace(faceA, colourA, verts, indices, groups);
 
@@ -359,6 +432,14 @@ namespace HammerTime.BrushBuilder.Tools
             {
                 var colour = Color.FromArgb(64, Color.DeepSkyBlue).ToVector4();
                 RenderFace(SelectedFaces[0].Face, colour, verts, indices, groups);
+            }
+
+            // Render gizmos for hit points of selected faces
+            for (int i = 0; i < SelectedFaces.Count; i++)
+            {
+                var entry = SelectedFaces[i];
+                var color = i == 0 ? Color.DeepSkyBlue : (i == 1 ? Color.LimeGreen : Color.Coral);
+                RenderHitPointGizmo(entry.HitPoint, entry.Face.Plane.Normal, color.ToVector4(), verts, indices, groups);
             }
 
             if (verts.Count > 0)
@@ -494,6 +575,35 @@ namespace HammerTime.BrushBuilder.Tools
             }
 
             groups.Add(new BufferGroup(PipelineType.Wireframe, CameraType.Perspective, centroid, wfIndOffs, (uint)(indices.Count - wfIndOffs)));
+        }
+
+        private void RenderHitPointGizmo(Vector3 position, Vector3 normal, Vector4 color, List<VertexStandard> verts, List<uint> indices, List<BufferGroup> groups)
+        {
+            var wfIndOffs = (uint)indices.Count;
+            var wfOffs = (uint)verts.Count;
+            var outlineColour = new Vector4(color.X, color.Y, color.Z, 1f);
+
+            // 3D Cross (Gizmo)
+            float size = 4f;
+            verts.Add(new VertexStandard { Position = position - new Vector3(size, 0, 0), Colour = outlineColour, Tint = Vector4.One });
+            verts.Add(new VertexStandard { Position = position + new Vector3(size, 0, 0), Colour = outlineColour, Tint = Vector4.One });
+            verts.Add(new VertexStandard { Position = position - new Vector3(0, size, 0), Colour = outlineColour, Tint = Vector4.One });
+            verts.Add(new VertexStandard { Position = position + new Vector3(0, size, 0), Colour = outlineColour, Tint = Vector4.One });
+            verts.Add(new VertexStandard { Position = position - new Vector3(0, 0, size), Colour = outlineColour, Tint = Vector4.One });
+            verts.Add(new VertexStandard { Position = position + new Vector3(0, 0, size), Colour = outlineColour, Tint = Vector4.One });
+
+            // Normal vector line
+            float normalLen = 12f;
+            var normalColour = Color.Yellow.ToVector4();
+            verts.Add(new VertexStandard { Position = position, Colour = normalColour, Tint = Vector4.One });
+            verts.Add(new VertexStandard { Position = position + normal * normalLen, Colour = normalColour, Tint = Vector4.One });
+
+            indices.Add(wfOffs + 0); indices.Add(wfOffs + 1);
+            indices.Add(wfOffs + 2); indices.Add(wfOffs + 3);
+            indices.Add(wfOffs + 4); indices.Add(wfOffs + 5);
+            indices.Add(wfOffs + 6); indices.Add(wfOffs + 7);
+
+            groups.Add(new BufferGroup(PipelineType.Wireframe, CameraType.Perspective, position, wfIndOffs, (uint)(indices.Count - wfIndOffs)));
         }
     }
 }
