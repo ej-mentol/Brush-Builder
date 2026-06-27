@@ -30,6 +30,7 @@ namespace HammerTime.BrushBuilder.Tools
     public class BrushBuilderTool : BaseTool
     {
         public List<(Face Face, Solid Solid, IMapObject Object, Vector3 HitPoint)> SelectedFaces { get; } = new();
+        public event Action? SelectionChanged;
 
         public int AlignmentShiftOffset { get; set; } = 0;
 
@@ -107,6 +108,7 @@ namespace HammerTime.BrushBuilder.Tools
             HoverFace = null;
             _lastPreviewLogState = "";
             LogSelectionState();
+            SelectionChanged?.Invoke();
         }
 
         public override Image GetIcon()
@@ -211,6 +213,7 @@ namespace HammerTime.BrushBuilder.Tools
             {
                 SelectedFaces.Clear();
                 viewport.Control.Invalidate();
+                SelectionChanged?.Invoke();
                 return;
             }
 
@@ -253,6 +256,7 @@ namespace HammerTime.BrushBuilder.Tools
             }
             LogSelectionState();
             viewport.Control.Invalidate();
+            SelectionChanged?.Invoke();
         }
 
         private void LogSelectionState()
@@ -285,6 +289,7 @@ namespace HammerTime.BrushBuilder.Tools
 
         private void RefreshReferences(MapDocument document)
         {
+            int oldCount = SelectedFaces.Count;
             for (int i = SelectedFaces.Count - 1; i >= 0; i--)
             {
                 var entry = SelectedFaces[i];
@@ -307,6 +312,10 @@ namespace HammerTime.BrushBuilder.Tools
                     continue;
                 }
                 SelectedFaces[i] = (currentFace, currentSolid, currentObj, entry.HitPoint);
+            }
+            if (SelectedFaces.Count != oldCount)
+            {
+                SelectionChanged?.Invoke();
             }
         }
 
@@ -430,7 +439,7 @@ namespace HammerTime.BrushBuilder.Tools
             }
             else if (SelectedFaces.Count == 1)
             {
-                var colour = Color.FromArgb(64, Color.DeepSkyBlue).ToVector4();
+                var colour = Color.FromArgb(Operations.BrushBuilderColors.PreviewColor.A, Operations.BrushBuilderColors.Face1).ToVector4();
                 RenderFace(SelectedFaces[0].Face, colour, verts, indices, groups);
             }
 
@@ -438,7 +447,7 @@ namespace HammerTime.BrushBuilder.Tools
             for (int i = 0; i < SelectedFaces.Count; i++)
             {
                 var entry = SelectedFaces[i];
-                var color = i == 0 ? Color.DeepSkyBlue : (i == 1 ? Color.LimeGreen : Color.Coral);
+                var color = i == 0 ? Operations.BrushBuilderColors.Face1 : (i == 1 ? Operations.BrushBuilderColors.Face2 : Operations.BrushBuilderColors.FaceClip);
                 RenderHitPointGizmo(entry.HitPoint, entry.Face.Plane.Normal, color.ToVector4(), verts, indices, groups);
             }
 
@@ -456,13 +465,13 @@ namespace HammerTime.BrushBuilder.Tools
             }
             if (sourceFace == faceA)
             {
-                return Color.FromArgb(64, Color.DeepSkyBlue).ToVector4();
+                return Color.FromArgb(Operations.BrushBuilderColors.PreviewColor.A, Operations.BrushBuilderColors.Face1).ToVector4();
             }
             if (sourceFace == faceB)
             {
-                return Color.FromArgb(64, Color.LimeGreen).ToVector4();
+                return Color.FromArgb(Operations.BrushBuilderColors.PreviewColor.A, Operations.BrushBuilderColors.Face2).ToVector4();
             }
-            return Color.FromArgb(64, Color.Coral).ToVector4();
+            return Color.FromArgb(Operations.BrushBuilderColors.PreviewColor.A, Operations.BrushBuilderColors.FaceClip).ToVector4();
         }
 
         private void RenderFace(Face face, Vector4 color, List<VertexStandard> verts, List<uint> indices, List<BufferGroup> groups)

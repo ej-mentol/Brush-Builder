@@ -16,6 +16,27 @@ using Plane = Sledge.DataStructures.Geometric.Plane;
 
 namespace HammerTime.BrushBuilder.Operations
 {
+    public static class BrushBuilderColors
+    {
+        // Viewport face overlays
+        public static readonly System.Drawing.Color Face1 = System.Drawing.Color.DeepSkyBlue;
+        public static readonly System.Drawing.Color Face2 = System.Drawing.Color.LimeGreen;
+        public static readonly System.Drawing.Color FaceClip = System.Drawing.Color.Coral;
+        public static readonly System.Drawing.Color FaceHover = System.Drawing.Color.Gold;
+
+        // UI active states
+        public static readonly System.Drawing.Color ButtonActive = System.Drawing.Color.DodgerBlue;
+        public static readonly System.Drawing.Color ButtonActiveFore = System.Drawing.Color.White;
+        public static readonly System.Drawing.Color ButtonSwapActive = System.Drawing.Color.Orange;
+        public static readonly System.Drawing.Color ButtonSwapActiveFore = System.Drawing.Color.Black;
+
+        // Validation hints
+        public static readonly System.Drawing.Color ValidationWarn = System.Drawing.Color.OrangeRed;
+
+        // Цвет превью браша (прозрачный голубой с альфой 64 для лучшего обзора геометрии)
+        public static readonly System.Drawing.Color PreviewColor = System.Drawing.Color.FromArgb(64, System.Drawing.Color.DodgerBlue);
+    }
+
     public static partial class BuildBrushOperation
     {
         public static Action<string>? OnLog { get; set; }

@@ -37,12 +37,8 @@ namespace HammerTime.BrushBuilder.UI
         private Button btnModeMax = null!;
         private string _selectedSizeMode = "Stretch (Loft)";
 
-        // Copy Profile Side buttons
-        private Button btnCopyNone = null!;
-        private Button btnCopyU = null!;
-        private Button btnCopyD = null!;
-        private Button btnCopyL = null!;
-        private Button btnCopyR = null!;
+        // Copy Profile Side buttons (Rose Grid)
+        private Button[] copyRoseButtons = null!;
         private string _selectedCopySide = "None";
 
         // Side Alignment buttons
@@ -86,7 +82,6 @@ namespace HammerTime.BrushBuilder.UI
         private ComboBox cmbProfiles = null!;
         private readonly List<ToolProfile> _profiles = new();
 
-        private Timer _selectionCheckTimer = null!;
         private bool _isBuilding = false;
 
         public BrushBuilderWindow(Tools.BrushBuilderTool tool)
@@ -109,9 +104,12 @@ namespace HammerTime.BrushBuilder.UI
                 });
             });
 
-            _selectionCheckTimer = new Timer { Interval = 200 };
-            _selectionCheckTimer.Tick += (s, e) => UpdateSelectionStatus();
-            _selectionCheckTimer.Start();
+            _tool.SelectionChanged += OnSelectionChanged;
+        }
+
+        private void OnSelectionChanged()
+        {
+            this.InvokeLater(() => UpdateSelectionStatus());
         }
 
         private void InitializeComponent()
@@ -132,7 +130,7 @@ namespace HammerTime.BrushBuilder.UI
                 Padding = new Padding(4)
             };
             pnlLeft.RowStyles.Add(new RowStyle(SizeType.Absolute, 65f));   // Build & Swap Actions
-            pnlLeft.RowStyles.Add(new RowStyle(SizeType.Absolute, 140f));  // Profile modes & Copy Side
+            pnlLeft.RowStyles.Add(new RowStyle(SizeType.Absolute, 162f));  // Profile modes & Copy Side
             pnlLeft.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));  // Thickness & Position
             pnlLeft.RowStyles.Add(new RowStyle(SizeType.Absolute, 100f));  // Validation & Reset All
 
@@ -148,19 +146,32 @@ namespace HammerTime.BrushBuilder.UI
 
             // 2. Profile GroupBox
             var grpProfile = new GroupBox { Text = "Profile", Dock = DockStyle.Fill, Margin = new Padding(2) };
-            var pnlProfileLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
-            pnlProfileLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
-            pnlProfileLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
-            pnlProfileLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 18f));
-            pnlProfileLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            var pnlProfileLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Margin = new Padding(0) };
+            pnlProfileLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108f)); // Left: Rose (84px width + gap)
+            pnlProfileLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));  // Right: Settings
+            pnlProfileLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 84f));        // Rose & Size Mode height
+            pnlProfileLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));        // Rot Offset height
+            pnlProfileLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));        // Tip label height
 
-            var flowProfileModes = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0) };
-            var lblSizeMode = new Label { Text = "Size Mode:", Width = 70, Height = 20, AutoSize = false, Margin = new Padding(0, 5, 4, 0) };
-            btnModeLoft = new Button { Text = "Loft", Width = 50, Height = 24, Margin = new Padding(1) };
-            btnModeF1 = new Button { Text = "F1", Width = 40, Height = 24, Margin = new Padding(1) };
-            btnModeF2 = new Button { Text = "F2", Width = 40, Height = 24, Margin = new Padding(1) };
-            btnModeMin = new Button { Text = "Min", Width = 45, Height = 24, Margin = new Padding(1) };
-            btnModeMax = new Button { Text = "Max", Width = 45, Height = 24, Margin = new Padding(1) };
+            // Left Side: Copy Side Rose Grid (3x3)
+            copyRoseButtons = CreateCopyRoseGrid();
+            var copyRoseContainer = WrapRoseGrid(copyRoseButtons);
+            pnlProfileLayout.Controls.Add(copyRoseContainer, 0, 0);
+            pnlProfileLayout.SetRowSpan(copyRoseContainer, 2); // Spans over rows 0 and 1
+
+            // Right Side: Size Mode Buttons arranged as 2 columns, 3 rows
+            var gridSizeMode = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 3, Margin = new Padding(0) };
+            gridSizeMode.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            gridSizeMode.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            gridSizeMode.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33f));
+            gridSizeMode.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33f));
+            gridSizeMode.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33f));
+
+            btnModeLoft = new Button { Text = "Loft", Dock = DockStyle.Fill, Margin = new Padding(1) };
+            btnModeF1 = new Button { Text = "F1", Dock = DockStyle.Fill, Margin = new Padding(1) };
+            btnModeF2 = new Button { Text = "F2", Dock = DockStyle.Fill, Margin = new Padding(1) };
+            btnModeMin = new Button { Text = "Min", Dock = DockStyle.Fill, Margin = new Padding(1) };
+            btnModeMax = new Button { Text = "Max", Dock = DockStyle.Fill, Margin = new Padding(1) };
 
             btnModeLoft.Click += (s, e) => SetSizeMode("Stretch (Loft)");
             btnModeF1.Click += (s, e) => SetSizeMode("Use Face 1 (Blue)");
@@ -168,27 +179,18 @@ namespace HammerTime.BrushBuilder.UI
             btnModeMin.Click += (s, e) => SetSizeMode("Smaller Face");
             btnModeMax.Click += (s, e) => SetSizeMode("Larger Face");
 
-            flowProfileModes.Controls.AddRange(new Control[] { lblSizeMode, btnModeLoft, btnModeF1, btnModeF2, btnModeMin, btnModeMax });
+            gridSizeMode.Controls.Add(btnModeLoft, 0, 0);
+            gridSizeMode.SetColumnSpan(btnModeLoft, 2);
+            gridSizeMode.Controls.Add(btnModeF1, 0, 1);
+            gridSizeMode.Controls.Add(btnModeF2, 1, 1);
+            gridSizeMode.Controls.Add(btnModeMin, 0, 2);
+            gridSizeMode.Controls.Add(btnModeMax, 1, 2);
 
-            var flowCopySide = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0) };
-            var lblCopySide = new Label { Text = "Copy Side:", Width = 70, Height = 20, AutoSize = false, Margin = new Padding(0, 5, 4, 0) };
-            btnCopyNone = new Button { Text = "None", Width = 50, Height = 24, Margin = new Padding(1) };
-            btnCopyU = new Button { Text = "U", Width = 30, Height = 24, Margin = new Padding(1) };
-            btnCopyD = new Button { Text = "D", Width = 30, Height = 24, Margin = new Padding(1) };
-            btnCopyL = new Button { Text = "L", Width = 30, Height = 24, Margin = new Padding(1) };
-            btnCopyR = new Button { Text = "R", Width = 30, Height = 24, Margin = new Padding(1) };
+            pnlProfileLayout.Controls.Add(gridSizeMode, 1, 0);
 
-            btnCopyNone.Click += (s, e) => SetCopySide("None");
-            btnCopyU.Click += (s, e) => SetCopySide("U");
-            btnCopyD.Click += (s, e) => SetCopySide("D");
-            btnCopyL.Click += (s, e) => SetCopySide("L");
-            btnCopyR.Click += (s, e) => SetCopySide("R");
+            lblProfileShapeTip = new Label { AutoSize = true, ForeColor = SystemColors.GrayText, Font = new Font(this.Font.FontFamily, 7.5f), Margin = new Padding(8, 2, 8, 0) };
 
-            flowCopySide.Controls.AddRange(new Control[] { lblCopySide, btnCopyNone, btnCopyU, btnCopyD, btnCopyL, btnCopyR });
-
-            lblProfileShapeTip = new Label { AutoSize = true, ForeColor = SystemColors.GrayText, Font = new Font(this.Font.FontFamily, 7.5f) };
-
-            var flowRotOffset = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0) };
+            var flowRotOffset = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 2, 0, 0) };
             var lblRotOffset = new Label { Text = "Rot Offset:", AutoSize = true, Margin = new Padding(0, 5, 4, 0) };
             numShiftOffset = new NumericUpDown { Minimum = 0, Maximum = 0, Value = 0, Width = 60, Enabled = false, TextAlign = HorizontalAlignment.Right, Margin = new Padding(0, 2, 4, 0) };
             int inputHeight = numShiftOffset.PreferredHeight;
@@ -205,26 +207,26 @@ namespace HammerTime.BrushBuilder.UI
             flowRotOffset.Controls.Add(numShiftOffset);
             flowRotOffset.Controls.Add(btnResetShiftOffset);
 
-            pnlProfileLayout.Controls.Add(flowProfileModes, 0, 0);
-            pnlProfileLayout.Controls.Add(flowCopySide, 0, 1);
+            pnlProfileLayout.Controls.Add(flowRotOffset, 1, 1); // Placed next to the Rose, under gridSizeMode
             pnlProfileLayout.Controls.Add(lblProfileShapeTip, 0, 2);
-            pnlProfileLayout.Controls.Add(flowRotOffset, 0, 3);
+            pnlProfileLayout.SetColumnSpan(lblProfileShapeTip, 2);
             grpProfile.Controls.Add(pnlProfileLayout);
             pnlLeft.Controls.Add(grpProfile, 0, 1);
 
             // 3. Thickness & Positioning GroupBox
             var grpThickness = new GroupBox { Text = "Thickness & Positioning", Dock = DockStyle.Fill, Margin = new Padding(2) };
             
-            var gridPositioning = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 9, RowCount = 4, Padding = new Padding(2) };
+            var gridPositioning = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 10, RowCount = 4, Padding = new Padding(2) };
             gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30f)); // 0: Side compass Left (L)
             gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30f)); // 1: Side compass Middle (U, C, D)
             gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30f)); // 2: Side compass Right (R)
-            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70f)); // 3: Label
-            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68f)); // 4: Numeric Box
-            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 26f)); // 5: Reset ↺
-            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 46f)); // 6: Units/% toggle button
-            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f)); // 7: Preview label
-            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 22f)); // 8: Color block
+            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 10f)); // 3: Vertical Separator
+            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70f)); // 4: Label
+            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68f)); // 5: Numeric Box
+            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 26f)); // 6: Reset ↺
+            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 46f)); // 7: Units/% toggle button
+            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f)); // 8: Preview label
+            gridPositioning.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 22f)); // 9: Color block
 
             gridPositioning.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
             gridPositioning.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
@@ -260,11 +262,16 @@ namespace HammerTime.BrushBuilder.UI
             };
             numThickness.ValueChanged += (s, e) => { UpdateThicknessPreview(); UpdateSettingsCache(); _tool.InvalidateViewports(); };
 
-            gridPositioning.Controls.Add(lblThick, 3, 0);
-            gridPositioning.Controls.Add(numThickness, 4, 0);
-            gridPositioning.Controls.Add(btnResetThickness, 5, 0);
-            gridPositioning.Controls.Add(btnUsePercentageThick, 6, 0);
-            gridPositioning.Controls.Add(lblThicknessPreview, 7, 0);
+            // Add vertical separator line between compass and values
+            var sepPositioning = new Panel { BackColor = SystemColors.ControlDark, Width = 1, Dock = DockStyle.Fill, Margin = new Padding(4, 2, 4, 2) };
+            gridPositioning.Controls.Add(sepPositioning, 3, 0);
+            gridPositioning.SetRowSpan(sepPositioning, 3);
+
+            gridPositioning.Controls.Add(lblThick, 4, 0);
+            gridPositioning.Controls.Add(numThickness, 5, 0);
+            gridPositioning.Controls.Add(btnResetThickness, 6, 0);
+            gridPositioning.Controls.Add(btnUsePercentageThick, 7, 0);
+            gridPositioning.Controls.Add(lblThicknessPreview, 8, 0);
 
             // Row 1: Inset F1 inputs
             gridPositioning.Controls.Add(btnAlignL, 0, 1);
@@ -276,7 +283,7 @@ namespace HammerTime.BrushBuilder.UI
             btnResetOffsetA = new Button { Text = "↺", Width = 22, Height = inputHeight, Margin = new Padding(0), FlatStyle = FlatStyle.System, Anchor = AnchorStyles.None };
             btnUsePercentageOffsetA = new Button { Text = "units", Width = 42, Height = inputHeight, Margin = new Padding(0), FlatStyle = FlatStyle.Flat, Anchor = AnchorStyles.None };
             lblOffsetAPreview = new Label { Text = "", ForeColor = SystemColors.GrayText, Anchor = AnchorStyles.Left, AutoSize = true, Margin = new Padding(2, 0, 0, 0) };
-            var lblColorA = new Label { Text = "■", ForeColor = Color.DeepSkyBlue, Font = new Font(this.Font.FontFamily, 12f), Anchor = AnchorStyles.None, AutoSize = true, Margin = new Padding(0) };
+            var pnlColorA = new Panel { BackColor = Operations.BrushBuilderColors.Face1, Width = 12, Height = 12, Anchor = AnchorStyles.None, Margin = new Padding(0) };
 
             btnResetOffsetA.Click += (s, e) => { numOffsetA.Value = 0m; UpdateOffsetAPreview(); _tool.InvalidateViewports(); };
             btnUsePercentageOffsetA.Click += (s, e) => {
@@ -286,12 +293,12 @@ namespace HammerTime.BrushBuilder.UI
             };
             numOffsetA.ValueChanged += (s, e) => { UpdateOffsetAPreview(); UpdateSettingsCache(); _tool.InvalidateViewports(); };
 
-            gridPositioning.Controls.Add(lblInsetF1, 3, 1);
-            gridPositioning.Controls.Add(numOffsetA, 4, 1);
-            gridPositioning.Controls.Add(btnResetOffsetA, 5, 1);
-            gridPositioning.Controls.Add(btnUsePercentageOffsetA, 6, 1);
-            gridPositioning.Controls.Add(lblOffsetAPreview, 7, 1);
-            gridPositioning.Controls.Add(lblColorA, 8, 1);
+            gridPositioning.Controls.Add(lblInsetF1, 4, 1);
+            gridPositioning.Controls.Add(numOffsetA, 5, 1);
+            gridPositioning.Controls.Add(btnResetOffsetA, 6, 1);
+            gridPositioning.Controls.Add(btnUsePercentageOffsetA, 7, 1);
+            gridPositioning.Controls.Add(lblOffsetAPreview, 8, 1);
+            gridPositioning.Controls.Add(pnlColorA, 9, 1);
 
             // Row 2: Inset F2 inputs
             gridPositioning.Controls.Add(btnAlignD, 1, 2);
@@ -301,7 +308,7 @@ namespace HammerTime.BrushBuilder.UI
             btnResetOffsetB = new Button { Text = "↺", Width = 22, Height = inputHeight, Margin = new Padding(0), FlatStyle = FlatStyle.System, Anchor = AnchorStyles.None };
             btnUsePercentageOffsetB = new Button { Text = "units", Width = 42, Height = inputHeight, Margin = new Padding(0), FlatStyle = FlatStyle.Flat, Anchor = AnchorStyles.None };
             lblOffsetBPreview = new Label { Text = "", ForeColor = SystemColors.GrayText, Anchor = AnchorStyles.Left, AutoSize = true, Margin = new Padding(2, 0, 0, 0) };
-            var lblColorB = new Label { Text = "■", ForeColor = Color.LimeGreen, Font = new Font(this.Font.FontFamily, 12f), Anchor = AnchorStyles.None, AutoSize = true, Margin = new Padding(0) };
+            var pnlColorB = new Panel { BackColor = Operations.BrushBuilderColors.Face2, Width = 12, Height = 12, Anchor = AnchorStyles.None, Margin = new Padding(0) };
 
             btnResetOffsetB.Click += (s, e) => { numOffsetB.Value = 0m; UpdateOffsetBPreview(); _tool.InvalidateViewports(); };
             btnUsePercentageOffsetB.Click += (s, e) => {
@@ -311,27 +318,27 @@ namespace HammerTime.BrushBuilder.UI
             };
             numOffsetB.ValueChanged += (s, e) => { UpdateOffsetBPreview(); UpdateSettingsCache(); _tool.InvalidateViewports(); };
 
-            gridPositioning.Controls.Add(lblInsetF2, 3, 2);
-            gridPositioning.Controls.Add(numOffsetB, 4, 2);
-            gridPositioning.Controls.Add(btnResetOffsetB, 5, 2);
-            gridPositioning.Controls.Add(btnUsePercentageOffsetB, 6, 2);
-            gridPositioning.Controls.Add(lblOffsetBPreview, 7, 2);
-            gridPositioning.Controls.Add(lblColorB, 8, 2);
+            gridPositioning.Controls.Add(lblInsetF2, 4, 2);
+            gridPositioning.Controls.Add(numOffsetB, 5, 2);
+            gridPositioning.Controls.Add(btnResetOffsetB, 6, 2);
+            gridPositioning.Controls.Add(btnUsePercentageOffsetB, 7, 2);
+            gridPositioning.Controls.Add(lblOffsetBPreview, 8, 2);
+            gridPositioning.Controls.Add(pnlColorB, 9, 2);
 
             // Row 3: Depth Alignment
             var pnlDepthContainer = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Margin = new Padding(0, 4, 0, 0) };
             var lblDepthAlign = new Label { Text = "Depth Alignment:", Font = new Font(this.Font, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 6, 8, 0) };
-            btnDepthF1 = new Button { Text = "F1", Width = 36, Height = 24, Margin = new Padding(1) };
-            btnDepthMid = new Button { Text = "Mid", Width = 36, Height = 24, Margin = new Padding(1) };
-            btnDepthF2 = new Button { Text = "F2", Width = 36, Height = 24, Margin = new Padding(1) };
+            btnDepthF1 = new Button { Text = "F1", Width = 40, Height = 24, Margin = new Padding(1) };
+            btnDepthMid = new Button { Text = "Mid", Width = 45, Height = 24, Margin = new Padding(1) };
+            btnDepthF2 = new Button { Text = "F2", Width = 40, Height = 24, Margin = new Padding(1) };
 
             btnDepthF1.Click += (s, e) => SetDepth("F1");
             btnDepthMid.Click += (s, e) => SetDepth("Mid");
             btnDepthF2.Click += (s, e) => SetDepth("F2");
             pnlDepthContainer.Controls.AddRange(new Control[] { lblDepthAlign, btnDepthF1, btnDepthMid, btnDepthF2 });
 
-            gridPositioning.Controls.Add(pnlDepthContainer, 0, 3);
-            gridPositioning.SetColumnSpan(pnlDepthContainer, 9);
+            gridPositioning.Controls.Add(pnlDepthContainer, 4, 3);
+            gridPositioning.SetColumnSpan(pnlDepthContainer, 6);
 
             grpThickness.Controls.Add(gridPositioning);
             pnlLeft.Controls.Add(grpThickness, 0, 2);
@@ -625,20 +632,22 @@ namespace HammerTime.BrushBuilder.UI
 
         private void UpdateCopySideButtons()
         {
-            var buttons = new[] {
-                (btnCopyNone, "None"),
-                (btnCopyU, "U"),
-                (btnCopyD, "D"),
-                (btnCopyL, "L"),
-                (btnCopyR, "R")
-            };
+            if (copyRoseButtons == null) return;
 
             Color normalBack = btnBuild != null ? btnBuild.BackColor : SystemColors.Control;
             Color normalFore = btnBuild != null ? btnBuild.ForeColor : SystemColors.ControlText;
 
-            foreach (var (btn, sideVal) in buttons)
+            for (int i = 0; i < 9; i++)
             {
+                var btn = copyRoseButtons[i];
                 if (btn == null) continue;
+
+                string sideVal = "None";
+                if (i == 1) sideVal = "U";
+                else if (i == 3) sideVal = "L";
+                else if (i == 5) sideVal = "R";
+                else if (i == 7) sideVal = "D";
+
                 bool isActive = _selectedCopySide.Equals(sideVal, StringComparison.OrdinalIgnoreCase);
                 if (isActive)
                 {
@@ -833,8 +842,9 @@ namespace HammerTime.BrushBuilder.UI
                 _tool.AlignmentShiftOffset = 0;
             }
 
-            if (lstFaces != null)
+            if ((selectionChanged || setChanged) && lstFaces != null)
             {
+                lstFaces.BeginUpdate();
                 lstFaces.Items.Clear();
                 for (int i = 0; i < _tool.SelectedFaces.Count; i++)
                 {
@@ -848,6 +858,7 @@ namespace HammerTime.BrushBuilder.UI
                 {
                     lstFaces.Items.Add("No faces selected in viewports.");
                 }
+                lstFaces.EndUpdate();
             }
 
             bool isSwapped = false;
@@ -1066,6 +1077,10 @@ namespace HammerTime.BrushBuilder.UI
             {
                 e.Cancel = true;
                 Oy.Publish("ActivateTool", "SelectTool");
+            }
+            else
+            {
+                _tool.SelectionChanged -= OnSelectionChanged;
             }
             base.OnFormClosing(e);
         }
@@ -1531,6 +1546,59 @@ namespace HammerTime.BrushBuilder.UI
             SelectedThickness = (float)numThickness.Value;
             SelectedUsePercentageThick = _usePercentageThick;
             SelectedCopySide = _selectedCopySide;
+        }
+
+        private static TableLayoutPanel WrapRoseGrid(Button[] buttons)
+        {
+            var grid = new TableLayoutPanel { Width = 84, Height = 84, Anchor = AnchorStyles.Left | AnchorStyles.Top, ColumnCount = 3, RowCount = 3, Margin = new Padding(4, 2, 4, 0) };
+            for (int c = 0; c < 3; c++)
+            {
+                grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+                grid.RowStyles.Add(new RowStyle(SizeType.Percent, 33.33f));
+            }
+            for (int i = 0; i < 9; i++)
+            {
+                if (buttons[i] != null)
+                {
+                    grid.Controls.Add(buttons[i], i % 3, i / 3);
+                }
+            }
+            return grid;
+        }
+
+        private Button[] CreateCopyRoseGrid()
+        {
+            var buttons = new Button[9];
+            string[] labels = { "", "↑", "", "←", "N", "→", "", "↓", "" };
+            for (int i = 0; i < 9; i++)
+            {
+                if (i == 0 || i == 2 || i == 6 || i == 8)
+                {
+                    buttons[i] = null!;
+                    continue;
+                }
+
+                int index = i;
+                buttons[i] = new Button
+                {
+                    Text = labels[i],
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(1),
+                    FlatStyle = FlatStyle.Flat,
+                    Font = new Font("Segoe UI Symbol", 9f)
+                };
+                buttons[i].Click += (s, e) =>
+                {
+                    string sideVal = "None";
+                    if (index == 1) sideVal = "U";
+                    else if (index == 3) sideVal = "L";
+                    else if (index == 5) sideVal = "R";
+                    else if (index == 7) sideVal = "D";
+
+                    SetCopySide(sideVal);
+                };
+            }
+            return buttons;
         }
     }
 
