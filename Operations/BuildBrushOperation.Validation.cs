@@ -165,6 +165,18 @@ namespace HammerTime.BrushBuilder.Operations
                     }
                 }
 
+                const float MinEdgeLength = 0.25f;
+                for (int i = 0; i < face.Count; i++)
+                {
+                    var p1 = face[i];
+                    var p2 = face[(i + 1) % face.Count];
+                    if (Vector3.Distance(p1, p2) < MinEdgeLength)
+                    {
+                        reason = $"Generated face {faceIndex} has an extremely short edge (length {Vector3.Distance(p1, p2):F4} < {MinEdgeLength}). GoldSrc compilers might collapse these vertices and report degenerate solid errors.";
+                        return false;
+                    }
+                }
+
                 planes.Add(plane);
                 allVerts.AddRange(face);
             }

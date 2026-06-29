@@ -60,27 +60,20 @@ namespace HammerTime.BrushBuilder.Tools
 
         public Face? HoverFace { get; set; }
 
-        private bool _showHoverHelper = true;
-        public bool ShowHoverHelper
-        {
-            get => _showHoverHelper;
-            set
-            {
-                _showHoverHelper = value;
-                if (!_showHoverHelper)
-                {
-                    HoverFace = null;
-                }
-                InvalidateViewports();
-            }
-        }
+        private readonly Lazy<UI.BrushBuilderSettingsContainer> _settings;
+
+        public bool ShowHoverHelper => _settings.Value.ShowHoverPreview;
 
         private UI.BrushBuilderWindow _window;
 
-        public BrushBuilderTool()
+        [ImportingConstructor]
+        public BrushBuilderTool(
+            [Import] Lazy<UI.BrushBuilderSettingsContainer> settings
+        )
         {
+            _settings = settings;
             Usage = ToolUsage.View3D;
-            _window = new UI.BrushBuilderWindow(this);
+            _window = new UI.BrushBuilderWindow(this, settings);
             Oy.Subscribe<MapViewport>("MapViewport:Created", vp => AddViewport(vp));
         }
 
@@ -92,6 +85,7 @@ namespace HammerTime.BrushBuilder.Tools
                 _window.Owner = parent;
             }
             _window.Show();
+            await Task.Delay(50);
             await base.ToolSelected();
         }
 
@@ -372,7 +366,10 @@ namespace HammerTime.BrushBuilder.Tools
                     thickness, usePercentageThick,
                     _window.SelectedCopySide,
                     alignmentShiftOffset,
-                    out var generatedFaces,
+                    _window.Triangulate,
+                    _window.SplitMode,
+                    _window.SelectedSlices,
+                    out var generatedSolids,
                     out var previewReason,
                     enableLogging: false,
                     otherHitPoints: otherHitPoints
@@ -380,11 +377,23 @@ namespace HammerTime.BrushBuilder.Tools
 
                 if (hasGeneratedGeometry)
                 {
-                    bool isValid = Operations.BuildBrushOperation.ValidateGeneratedFaces(
-                        generatedFaces.Select(x => (IReadOnlyList<Vector3>)x.Vertices).ToList(),
-                        out var validationReason);
+                    bool allSolidsValid = true;
+                    var validationReasons = new List<string>();
+                    foreach (var solidFaces in generatedSolids)
+                    {
+                        if (!Operations.BuildBrushOperation.ValidateGeneratedFaces(
+                            solidFaces.Select(x => (IReadOnlyList<Vector3>)x.Vertices).ToList(),
+                            out var validationReason))
+                        {
+                            allSolidsValid = false;
+                            if (!string.IsNullOrEmpty(validationReason))
+                            {
+                                validationReasons.Add(validationReason);
+                            }
+                        }
+                    }
 
-                    var allVerts = generatedFaces.SelectMany(f => f.Vertices).ToList();
+                    var allVerts = generatedSolids.SelectMany(s => s.SelectMany(f => f.Vertices)).ToList();
                     string logState = "";
                     if (allVerts.Count > 0)
                     {
@@ -397,7 +406,7 @@ namespace HammerTime.BrushBuilder.Tools
                         }
                         var size = max - min;
                         float volume = Math.Abs(size.X * size.Y * size.Z);
-                        logState = $"Bounds Size: X={size.X:F1}, Y={size.Y:F1}, Z={size.Z:F1} (Volume: {volume:F1}), Faces: {generatedFaces.Count}, Valid: {isValid}";
+                        logState = $"Bounds Size: X={size.X:F1}, Y={size.Y:F1}, Z={size.Z:F1} (Volume: {volume:F1}), Solids: {generatedSolids.Count}, Valid: {allSolidsValid}";
                     }
                     else
                     {
@@ -408,17 +417,24 @@ namespace HammerTime.BrushBuilder.Tools
                     {
                         _lastPreviewLogState = logState;
                         Operations.BuildBrushOperation.OnLog?.Invoke($"[Preview Render] {logState}");
-                        if (!isValid && !string.IsNullOrEmpty(validationReason))
+                        if (!allSolidsValid && validationReasons.Count > 0)
                         {
-                            Operations.BuildBrushOperation.OnLog?.Invoke($"  * Preview Validation warning: {validationReason}");
+                            Operations.BuildBrushOperation.OnLog?.Invoke($"  * Preview Validation warning: {string.Join(" | ", validationReasons)}");
                         }
                     }
 
-                    foreach (var generatedFace in generatedFaces)
+                    foreach (var solidFaces in generatedSolids)
                     {
-                        var colour = GetGeneratedFacePreviewColor(generatedFace.SourceFace, faceA, faceB, isValid);
-                        var normal = new Plane(generatedFace.Vertices[0], generatedFace.Vertices[1], generatedFace.Vertices[2]).Normal;
-                        RenderCap(generatedFace.Vertices, normal, colour, verts, indices, groups);
+                        bool isSegmentValid = Operations.BuildBrushOperation.ValidateGeneratedFaces(
+                            solidFaces.Select(x => (IReadOnlyList<Vector3>)x.Vertices).ToList(),
+                            out _);
+
+                        foreach (var generatedFace in solidFaces)
+                        {
+                            var colour = GetGeneratedFacePreviewColor(generatedFace.SourceFace, faceA, faceB, isSegmentValid);
+                            var normal = new Plane(generatedFace.Vertices[0], generatedFace.Vertices[1], generatedFace.Vertices[2]).Normal;
+                            RenderCap(generatedFace.Vertices, normal, colour, verts, indices, groups);
+                        }
                     }
                 }
                 else

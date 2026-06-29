@@ -74,19 +74,21 @@ namespace HammerTime.BrushBuilder.UI
         private bool _usePercentageOffsetB = false;
         private Label lblOffsetBPreview = null!;
 
-        private ComboBox cmbValidation = null!;
-        private CheckBox chkShowHoverHelper = null!;
+        private CheckBox chkTriangulate = null!;
+        private ComboBox cmbSplitMode = null!;
+        private NumericUpDown numSlices = null!;
         private TextBox txtLog = null!;
         private Label lblProfileShapeTip = null!;
-        private Label lblValidationTip = null!;
         private ComboBox cmbProfiles = null!;
         private readonly List<ToolProfile> _profiles = new();
 
         private bool _isBuilding = false;
+        private readonly Lazy<BrushBuilderSettingsContainer> _settings;
 
-        public BrushBuilderWindow(Tools.BrushBuilderTool tool)
+        public BrushBuilderWindow(Tools.BrushBuilderTool tool, Lazy<BrushBuilderSettingsContainer> settings)
         {
             _tool = tool;
+            _settings = settings;
             _cachedFaceIds.AddRange(_tool.SelectedFaces.Select(x => (long)x.Face.ID));
             _originalFaceIds.AddRange(_cachedFaceIds);
             InitializeComponent();
@@ -104,6 +106,12 @@ namespace HammerTime.BrushBuilder.UI
                 });
             });
 
+            Oy.Subscribe<object>("SettingsChanged", _ => {
+                this.InvokeLater(() => {
+                    _tool.InvalidateViewports();
+                });
+            });
+
             _tool.SelectionChanged += OnSelectionChanged;
         }
 
@@ -115,13 +123,13 @@ namespace HammerTime.BrushBuilder.UI
         private void InitializeComponent()
         {
             this.Text = "Brush Builder";
-            this.FormBorderStyle = FormBorderStyle.Sizable;
+            this.FormBorderStyle = FormBorderStyle.SizableToolWindow;
             this.StartPosition = FormStartPosition.Manual;
             this.ShowInTaskbar = false;
             this.Size = new Size(720, 620);
             this.MinimumSize = new Size(680, 580);
 
-            // Left Column layout (Actions, Profile, Thickness & Position, Validation)
+            // Left Column layout (Actions, Profile, Triangulation, Thickness & Position)
             var pnlLeft = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -131,17 +139,21 @@ namespace HammerTime.BrushBuilder.UI
             };
             pnlLeft.RowStyles.Add(new RowStyle(SizeType.Absolute, 65f));   // Build & Swap Actions
             pnlLeft.RowStyles.Add(new RowStyle(SizeType.Absolute, 162f));  // Profile modes & Copy Side
+            pnlLeft.RowStyles.Add(new RowStyle(SizeType.Absolute, 80f));   // Triangulation Group
             pnlLeft.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));  // Thickness & Position
-            pnlLeft.RowStyles.Add(new RowStyle(SizeType.Absolute, 100f));  // Validation & Reset All
 
             // 1. Actions Panel (Top-Left)
             var grpActions = new GroupBox { Text = "Actions", Dock = DockStyle.Fill, Margin = new Padding(2) };
-            var flowActions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(2) };
-            btnBuild = new Button { Text = "Build Filler Brush", Font = new Font(this.Font, FontStyle.Bold), Width = 150, Height = 28 };
-            chkShowHoverHelper = new CheckBox { Text = "Show Hover Preview", Checked = true, Margin = new Padding(8, 6, 0, 0), AutoSize = true };
-            flowActions.Controls.Add(btnBuild);
-            flowActions.Controls.Add(chkShowHoverHelper);
-            grpActions.Controls.Add(flowActions);
+            var gridActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Padding = new Padding(2) };
+            gridActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            gridActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+
+            btnBuild = new Button { Text = "Build Brush", Font = new Font(this.Font, FontStyle.Bold), Dock = DockStyle.Fill, Height = 28, Margin = new Padding(2) };
+            var btnResetAll = new Button { Text = "Reset All", Dock = DockStyle.Fill, Height = 28, Margin = new Padding(2) };
+            btnResetAll.Click += (s, e) => ResetAllSettings();
+            gridActions.Controls.Add(btnBuild, 0, 0);
+            gridActions.Controls.Add(btnResetAll, 1, 0);
+            grpActions.Controls.Add(gridActions);
             pnlLeft.Controls.Add(grpActions, 0, 0);
 
             // 2. Profile GroupBox
@@ -341,38 +353,64 @@ namespace HammerTime.BrushBuilder.UI
             gridPositioning.SetColumnSpan(pnlDepthContainer, 6);
 
             grpThickness.Controls.Add(gridPositioning);
-            pnlLeft.Controls.Add(grpThickness, 0, 2);
+            pnlLeft.Controls.Add(grpThickness, 0, 3);
 
-            // 4. Validation & Global Actions GroupBox
-            var grpValidation = new GroupBox { Text = "Validation & Globals", Dock = DockStyle.Fill, Margin = new Padding(2) };
-            var gridValidation = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
-            gridValidation.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60f));
-            gridValidation.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40f));
+            // 4. Triangulation & Splitting GroupBox
+            var grpTriangulation = new GroupBox { Text = "Triangulation & Splitting", Dock = DockStyle.Fill, Margin = new Padding(2) };
+            var gridTriangulation = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 2, Padding = new Padding(2) };
+            gridTriangulation.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60f));  // "Method:" label
+            gridTriangulation.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f)); // cmbSplitMode dropdown
+            gridTriangulation.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 50f));  // "Slices:" label
+            gridTriangulation.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 40f));  // numSlices numeric box
+            gridTriangulation.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 22f));  // Reset slices button
 
-            var pnlValMode = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
-            pnlValMode.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 50f));
-            pnlValMode.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            var lblValMode = new Label { Text = "Mode:", Anchor = AnchorStyles.Left, AutoSize = true };
-            cmbValidation = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, Height = 24 };
-            cmbValidation.Items.AddRange(new object[] { "Reject Invalid Brushes", "Warn Only", "Ignore Warnings" });
-            cmbValidation.SelectedIndex = 0;
-            cmbValidation.SelectedIndexChanged += (s, e) => UpdateValidationTip();
+            gridTriangulation.RowStyles.Add(new RowStyle(SizeType.Absolute, 22f));
+            gridTriangulation.RowStyles.Add(new RowStyle(SizeType.Absolute, 26f));
 
-            lblValidationTip = new Label { Text = "Checks planarity and convexity.", Dock = DockStyle.Fill, ForeColor = SystemColors.GrayText, Font = new Font(this.Font.FontFamily, 7.5f) };
+            chkTriangulate = new CheckBox { Text = "Triangulate non-planar", Checked = false, AutoSize = true, Margin = new Padding(2, 2, 0, 0) };
+            gridTriangulation.Controls.Add(chkTriangulate, 0, 0);
+            gridTriangulation.SetColumnSpan(chkTriangulate, 2);
 
-            pnlValMode.Controls.Add(lblValMode, 0, 0);
-            pnlValMode.Controls.Add(cmbValidation, 1, 0);
-            pnlValMode.Controls.Add(lblValidationTip, 1, 1);
-            pnlValMode.SetColumnSpan(lblValidationTip, 2);
+            var lblSlices = new Label { Text = "Slices:", Anchor = AnchorStyles.Right, AutoSize = true, Margin = new Padding(0, 0, 4, 0) };
+            gridTriangulation.Controls.Add(lblSlices, 2, 0);
+            
+            numSlices = new NumericUpDown { Minimum = 1, Maximum = 20, Value = 1, Dock = DockStyle.Fill, TextAlign = HorizontalAlignment.Right, Margin = new Padding(0) };
+            gridTriangulation.Controls.Add(numSlices, 3, 0);
 
-            var btnResetAll = new Button { Text = "Reset All Settings", Width = 110, Height = 28, Anchor = AnchorStyles.None };
-            btnResetAll.Click += (s, e) => ResetAllSettings();
+            var btnResetSlices = new Button { Text = "↺", Dock = DockStyle.Fill, Margin = new Padding(3, 0, 0, 0), FlatStyle = FlatStyle.System };
+            btnResetSlices.Click += (s, e) => {
+                numSlices.Value = 1m;
+            };
+            gridTriangulation.Controls.Add(btnResetSlices, 4, 0);
+            
+            var lblSplitMode = new Label { Text = "Method:", Anchor = AnchorStyles.Left, AutoSize = true, Margin = new Padding(2, 0, 0, 0) };
+            gridTriangulation.Controls.Add(lblSplitMode, 0, 1);
+            
+            cmbSplitMode = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill, Margin = new Padding(0, 2, 2, 0) };
+            cmbSplitMode.Items.AddRange(new object[] { "One Solid (Convex)", "One Solid (Diag /)", "One Solid (Diag \\)", "Wedges (Radial)", "Tetrahedral" });
+            cmbSplitMode.SelectedIndex = 0;
+            cmbSplitMode.Enabled = false;
+            gridTriangulation.Controls.Add(cmbSplitMode, 1, 1);
+            gridTriangulation.SetColumnSpan(cmbSplitMode, 4);
 
-            gridValidation.Controls.Add(pnlValMode, 0, 0);
-            gridValidation.Controls.Add(btnResetAll, 1, 0);
-            gridValidation.SetRowSpan(pnlValMode, 2);
-            grpValidation.Controls.Add(gridValidation);
-            pnlLeft.Controls.Add(grpValidation, 0, 3);
+            chkTriangulate.CheckedChanged += (s, e) => {
+                cmbSplitMode.Enabled = chkTriangulate.Checked;
+                UpdateSettingsCache();
+                _tool.InvalidateViewports();
+            };
+            cmbSplitMode.SelectedIndexChanged += (s, e) => {
+                UpdateSettingsCache();
+                _tool.InvalidateViewports();
+            };
+            numSlices.ValueChanged += (s, e) => {
+                UpdateSettingsCache();
+                _tool.InvalidateViewports();
+            };
+
+            grpTriangulation.Controls.Add(gridTriangulation);
+            pnlLeft.Controls.Add(grpTriangulation, 0, 2);
+
+
 
             // Right Column layout (Faces list, Instructions)
             var pnlRight = new TableLayoutPanel
@@ -499,7 +537,6 @@ namespace HammerTime.BrushBuilder.UI
 
             // Wire up main actions
             btnBuild.Click += async (s, e) => await PerformBuild();
-            chkShowHoverHelper.CheckedChanged += (s, e) => _tool.ShowHoverHelper = chkShowHoverHelper.Checked;
 
             UpdateAlignmentButtons();
             UpdateDepthButtons();
@@ -769,27 +806,7 @@ namespace HammerTime.BrushBuilder.UI
             }
         }
 
-        private void UpdateValidationTip()
-        {
-            if (lblValidationTip == null) return;
 
-            int mode = cmbValidation.SelectedIndex;
-            if (mode == 0)
-            {
-                lblValidationTip.Text = "Safety mode: checks planarity and convexity. Prevents creating invalid solids.";
-                lblValidationTip.ForeColor = SystemColors.GrayText;
-            }
-            else if (mode == 1)
-            {
-                lblValidationTip.Text = "Logs geometry validation warnings but allows inserting invalid solids.";
-                lblValidationTip.ForeColor = Color.OrangeRed;
-            }
-            else
-            {
-                lblValidationTip.Text = "Bypasses all geometry checks. Inserts solid blindly (caution: may crash Sledge).";
-                lblValidationTip.ForeColor = Color.OrangeRed;
-            }
-        }
 
         public void AppendLog(string message)
         {
@@ -1014,7 +1031,8 @@ namespace HammerTime.BrushBuilder.UI
                 string sizeMode = _selectedSizeMode;
                 string alignment = _selectedAlignment;
                 string depth = _selectedDepth;
-                int validationMode = cmbValidation.SelectedIndex;
+                int validationMode = (_settings.Value?.Validation?.Equals("Warn Only", StringComparison.OrdinalIgnoreCase) == true) ? 1 
+                                   : ((_settings.Value?.Validation?.Equals("Ignore Warnings", StringComparison.OrdinalIgnoreCase) == true) ? 2 : 0);
                 float thickness = (float)numThickness.Value;
                 bool usePercentageThick = _usePercentageThick;
 
@@ -1045,6 +1063,9 @@ namespace HammerTime.BrushBuilder.UI
                     thickness, usePercentageThick,
                     copySide,
                     validationMode,
+                    Triangulate,
+                    SplitMode,
+                    SelectedSlices,
                     _tool.AlignmentShiftOffset
                 );
 
@@ -1138,8 +1159,6 @@ namespace HammerTime.BrushBuilder.UI
                 _selectedDepth = settings.Depth ?? "Mid";
                 _selectedCopySide = settings.CopySide ?? "None";
 
-                cmbValidation.SelectedIndex = Math.Clamp(settings.ValidationIndex, 0, cmbValidation.Items.Count - 1);
-
                 _usePercentageThick = settings.UsePercentageThick;
                 _usePercentageOffsetA = settings.UsePercentageOffsetA;
                 _usePercentageOffsetB = settings.UsePercentageOffsetB;
@@ -1147,8 +1166,6 @@ namespace HammerTime.BrushBuilder.UI
                 numOffsetA.Value = Math.Clamp(settings.OffsetA, numOffsetA.Minimum, numOffsetA.Maximum);
                 numOffsetB.Value = Math.Clamp(settings.OffsetB, numOffsetB.Minimum, numOffsetB.Maximum);
                 numThickness.Value = Math.Clamp(settings.Thickness, numThickness.Minimum, numThickness.Maximum);
-
-                chkShowHoverHelper.Checked = settings.ShowHoverHelper;
 
                 UpdateAlignmentButtons();
                 UpdateDepthButtons();
@@ -1159,7 +1176,12 @@ namespace HammerTime.BrushBuilder.UI
                 UpdateOffsetBPreview();
                 UpdateUnitToggleButtonsColors();
                 UpdateProfileShapeTip();
-                UpdateValidationTip();
+
+                chkTriangulate.Checked = settings.Triangulate;
+                cmbSplitMode.SelectedItem = settings.SplitMode ?? "One Solid (Convex)";
+                cmbSplitMode.Enabled = settings.Triangulate;
+                numSlices.Value = Math.Clamp(settings.Slices, 1, 20);
+                UpdateSettingsCache();
             }
             catch
             {
@@ -1179,14 +1201,15 @@ namespace HammerTime.BrushBuilder.UI
                     Alignment = _selectedAlignment,
                     Depth = _selectedDepth,
                     CopySide = _selectedCopySide,
-                    ValidationIndex = cmbValidation.SelectedIndex,
                     OffsetA = numOffsetA.Value,
                     UsePercentageOffsetA = _usePercentageOffsetA,
                     OffsetB = numOffsetB.Value,
                     UsePercentageOffsetB = _usePercentageOffsetB,
                     Thickness = numThickness.Value,
                     UsePercentageThick = _usePercentageThick,
-                    ShowHoverHelper = chkShowHoverHelper.Checked
+                    Triangulate = chkTriangulate.Checked,
+                    SplitMode = cmbSplitMode.SelectedItem?.ToString() ?? "One Solid (Convex)",
+                    Slices = (int)numSlices.Value
                 };
 
                 var path = GetSettingsPath();
@@ -1314,11 +1337,6 @@ namespace HammerTime.BrushBuilder.UI
             numOffsetB.Value = (decimal)profile.OffsetB;
             _usePercentageOffsetB = profile.UsePercentageOffsetB;
             
-            if (profile.ValidationMode >= 0 && profile.ValidationMode < cmbValidation.Items.Count)
-            {
-                cmbValidation.SelectedIndex = profile.ValidationMode;
-            }
-            
             if (numShiftOffset.Enabled)
             {
                 numShiftOffset.Value = Math.Clamp(profile.RotationOffset, (int)numShiftOffset.Minimum, (int)numShiftOffset.Maximum);
@@ -1335,7 +1353,12 @@ namespace HammerTime.BrushBuilder.UI
             UpdateOffsetBPreview();
             UpdateUnitToggleButtonsColors();
             UpdateProfileShapeTip();
-            UpdateValidationTip();
+
+            chkTriangulate.Checked = profile.Triangulate;
+            cmbSplitMode.SelectedItem = profile.SplitMode ?? "One Solid (Convex)";
+            cmbSplitMode.Enabled = profile.Triangulate;
+            numSlices.Value = Math.Clamp(profile.Slices > 0 ? profile.Slices : 1, 1, 20);
+            UpdateSettingsCache();
         }
 
         private ToolProfile GetCurrentSettings(string name)
@@ -1353,8 +1376,12 @@ namespace HammerTime.BrushBuilder.UI
                 UsePercentageOffsetA = _usePercentageOffsetA,
                 OffsetB = (float)numOffsetB.Value,
                 UsePercentageOffsetB = _usePercentageOffsetB,
-                ValidationMode = cmbValidation.SelectedIndex,
-                RotationOffset = (int)numShiftOffset.Value
+                ValidationMode = (_settings.Value?.Validation?.Equals("Warn Only", StringComparison.OrdinalIgnoreCase) == true) ? 1 
+                               : ((_settings.Value?.Validation?.Equals("Ignore Warnings", StringComparison.OrdinalIgnoreCase) == true) ? 2 : 0),
+                RotationOffset = (int)numShiftOffset.Value,
+                Triangulate = chkTriangulate.Checked,
+                SplitMode = cmbSplitMode.SelectedItem?.ToString() ?? "One Solid (Convex)",
+                Slices = (int)numSlices.Value
             };
         }
 
@@ -1371,8 +1398,11 @@ namespace HammerTime.BrushBuilder.UI
             _usePercentageOffsetA = false;
             numOffsetB.Value = 0m;
             _usePercentageOffsetB = false;
+
+            chkTriangulate.Checked = false;
+            cmbSplitMode.SelectedIndex = 0;
+            numSlices.Value = 1m;
             
-            cmbValidation.SelectedIndex = 0;
             if (numShiftOffset.Enabled)
             {
                 numShiftOffset.Value = 0m;
@@ -1533,6 +1563,9 @@ namespace HammerTime.BrushBuilder.UI
         public float SelectedThickness { get; private set; } = 0f;
         public bool SelectedUsePercentageThick { get; private set; } = false;
         public string SelectedCopySide { get; private set; } = "None";
+        public bool Triangulate { get; private set; } = false;
+        public string SplitMode { get; private set; } = "One Solid (Convex)";
+        public int SelectedSlices { get; private set; } = 1;
 
         public void UpdateSettingsCache()
         {
@@ -1546,6 +1579,9 @@ namespace HammerTime.BrushBuilder.UI
             SelectedThickness = (float)numThickness.Value;
             SelectedUsePercentageThick = _usePercentageThick;
             SelectedCopySide = _selectedCopySide;
+            Triangulate = chkTriangulate != null && chkTriangulate.Checked;
+            SplitMode = cmbSplitMode?.SelectedItem?.ToString() ?? "One Solid (Convex)";
+            SelectedSlices = numSlices != null ? (int)numSlices.Value : 1;
         }
 
         private static TableLayoutPanel WrapRoseGrid(Button[] buttons)
@@ -1617,6 +1653,9 @@ namespace HammerTime.BrushBuilder.UI
         public int ValidationMode { get; set; } = 0;
         public int RotationOffset { get; set; } = 0;
         public string CopySide { get; set; } = "None";
+        public bool Triangulate { get; set; } = false;
+        public string SplitMode { get; set; } = "One Solid (Convex)";
+        public int Slices { get; set; } = 1;
     }
 
     public class BrushBuilderSettings
@@ -1635,5 +1674,8 @@ namespace HammerTime.BrushBuilder.UI
         public bool UsePercentageOffsetB { get; set; } = false;
         public bool ShowHoverHelper { get; set; } = true;
         public string CopySide { get; set; } = "None";
+        public bool Triangulate { get; set; } = false;
+        public string SplitMode { get; set; } = "One Solid (Convex)";
+        public int Slices { get; set; } = 1;
     }
 }

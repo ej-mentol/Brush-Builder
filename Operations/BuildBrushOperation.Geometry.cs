@@ -221,7 +221,13 @@ namespace HammerTime.BrushBuilder.Operations
             // Define local orthogonal axes relative to the target faces
             Vector3 localUpA = GetLongestEdgeDirection(capA);
             localUpA = OrientDirectionConsistent(localUpA, planeA.Normal);
-            Vector3 verticalVecA = Vector3.Normalize(localUpA - Vector3.Dot(connectionDir, localUpA) * connectionDir);
+            Vector3 projectedUpA = localUpA - Vector3.Dot(connectionDir, localUpA) * connectionDir;
+            if (projectedUpA.LengthSquared() < 1e-6f)
+            {
+                Vector3 temp = Math.Abs(connectionDir.Z) < 0.9f ? Vector3.UnitZ : Vector3.UnitY;
+                projectedUpA = Vector3.Cross(connectionDir, temp);
+            }
+            Vector3 verticalVecA = Vector3.Normalize(projectedUpA);
             Vector3 horizontalVecA = Vector3.Normalize(Vector3.Cross(verticalVecA, connectionDir));
             horizontalVecA = OrientHorizontalConsistent(horizontalVecA);
 

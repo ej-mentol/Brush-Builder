@@ -28,4 +28,5 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\Tool_BrushBuilder.png" />
   </ItemGroup>
+
 </Project>
