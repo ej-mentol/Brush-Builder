@@ -85,6 +85,19 @@ namespace HammerTime.BrushBuilder.UI
         private bool _isBuilding = false;
         private readonly Lazy<BrushBuilderSettingsContainer> _settings;
 
+        private readonly Dictionary<Button, Font> _regularFonts = new();
+        private readonly Dictionary<Button, Font> _boldFonts = new();
+        private void SetButtonBold(Button btn, bool bold)
+        {
+            if (!_regularFonts.TryGetValue(btn, out var regular))
+            {
+                regular = btn.Font.Style == FontStyle.Bold ? new Font(btn.Font, FontStyle.Regular) : btn.Font;
+                _regularFonts[btn] = regular;
+                _boldFonts[btn] = new Font(regular, FontStyle.Bold);
+            }
+            btn.Font = bold ? _boldFonts[btn] : regular;
+        }
+
         public BrushBuilderWindow(Tools.BrushBuilderTool tool, Lazy<BrushBuilderSettingsContainer> settings)
         {
             _tool = tool;
@@ -122,6 +135,7 @@ namespace HammerTime.BrushBuilder.UI
 
         private void InitializeComponent()
         {
+            this.AutoScaleMode = AutoScaleMode.Dpi;
             this.Text = "Brush Builder";
             this.FormBorderStyle = FormBorderStyle.SizableToolWindow;
             this.StartPosition = FormStartPosition.Manual;
@@ -644,18 +658,9 @@ namespace HammerTime.BrushBuilder.UI
             {
                 if (btn == null) continue;
                 bool isActive = _selectedSizeMode.StartsWith(modeVal, StringComparison.OrdinalIgnoreCase);
-                if (isActive)
-                {
-                    btn.BackColor = Color.DodgerBlue;
-                    btn.ForeColor = Color.White;
-                    btn.Font = new Font(btn.Font, FontStyle.Bold);
-                }
-                else
-                {
-                    btn.BackColor = normalBack;
-                    btn.ForeColor = normalFore;
-                    btn.Font = new Font(btn.Font, FontStyle.Regular);
-                }
+                btn.BackColor = isActive ? Color.DodgerBlue : normalBack;
+                btn.ForeColor = isActive ? Color.White : normalFore;
+                SetButtonBold(btn, isActive);
             }
         }
 
@@ -686,18 +691,9 @@ namespace HammerTime.BrushBuilder.UI
                 else if (i == 7) sideVal = "D";
 
                 bool isActive = _selectedCopySide.Equals(sideVal, StringComparison.OrdinalIgnoreCase);
-                if (isActive)
-                {
-                    btn.BackColor = Color.DodgerBlue;
-                    btn.ForeColor = Color.White;
-                    btn.Font = new Font(btn.Font, FontStyle.Bold);
-                }
-                else
-                {
-                    btn.BackColor = normalBack;
-                    btn.ForeColor = normalFore;
-                    btn.Font = new Font(btn.Font, FontStyle.Regular);
-                }
+                btn.BackColor = isActive ? Color.DodgerBlue : normalBack;
+                btn.ForeColor = isActive ? Color.White : normalFore;
+                SetButtonBold(btn, isActive);
             }
         }
 
@@ -720,19 +716,9 @@ namespace HammerTime.BrushBuilder.UI
                 if (btn == null) continue;
                 string btnTag = btn.Tag as string ?? "";
                 bool isActive = btnTag.Equals(_selectedAlignment, StringComparison.OrdinalIgnoreCase);
-
-                if (isActive)
-                {
-                    btn.BackColor = Color.DodgerBlue;
-                    btn.ForeColor = Color.White;
-                    btn.Font = new Font(btn.Font, FontStyle.Bold);
-                }
-                else
-                {
-                    btn.BackColor = normalBack;
-                    btn.ForeColor = normalFore;
-                    btn.Font = new Font(btn.Font, FontStyle.Regular);
-                }
+                btn.BackColor = isActive ? Color.DodgerBlue : normalBack;
+                btn.ForeColor = isActive ? Color.White : normalFore;
+                SetButtonBold(btn, isActive);
             }
         }
 
@@ -754,18 +740,9 @@ namespace HammerTime.BrushBuilder.UI
             {
                 if (btn == null) continue;
                 bool isActive = btn.Text.Equals(_selectedDepth, StringComparison.OrdinalIgnoreCase);
-                if (isActive)
-                {
-                    btn.BackColor = Color.DodgerBlue;
-                    btn.ForeColor = Color.White;
-                    btn.Font = new Font(btn.Font, FontStyle.Bold);
-                }
-                else
-                {
-                    btn.BackColor = normalBack;
-                    btn.ForeColor = normalFore;
-                    btn.Font = new Font(btn.Font, FontStyle.Regular);
-                }
+                btn.BackColor = isActive ? Color.DodgerBlue : normalBack;
+                btn.ForeColor = isActive ? Color.White : normalFore;
+                SetButtonBold(btn, isActive);
             }
         }
 
@@ -895,14 +872,14 @@ namespace HammerTime.BrushBuilder.UI
                     btnSwap.Text = "F2 ↔ F1 [Swapped]";
                     btnSwap.BackColor = Color.Orange;
                     btnSwap.ForeColor = Color.Black;
-                    btnSwap.Font = new Font(btnSwap.Font, FontStyle.Bold);
+                    SetButtonBold(btnSwap, true);
                 }
                 else
                 {
                     btnSwap.Text = "Swap F1 ↔ F2 Anchor Roles";
                     btnSwap.BackColor = btnBuild != null ? btnBuild.BackColor : SystemColors.Control;
                     btnSwap.ForeColor = btnBuild != null ? btnBuild.ForeColor : SystemColors.ControlText;
-                    btnSwap.Font = new Font(btnSwap.Font, FontStyle.Regular);
+                    SetButtonBold(btnSwap, false);
                 }
             }
 
@@ -1532,7 +1509,7 @@ namespace HammerTime.BrushBuilder.UI
 
         private string PromptForInput(string text, string caption, string defaultValue = "")
         {
-            Form prompt = new Form()
+            using Form prompt = new Form()
             {
                 Width = 300,
                 Height = 150,

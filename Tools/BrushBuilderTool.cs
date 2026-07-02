@@ -379,11 +379,14 @@ namespace HammerTime.BrushBuilder.Tools
                 {
                     bool allSolidsValid = true;
                     var validationReasons = new List<string>();
+                    var solidValidity = new List<bool>(generatedSolids.Count);
                     foreach (var solidFaces in generatedSolids)
                     {
-                        if (!Operations.BuildBrushOperation.ValidateGeneratedFaces(
+                        bool solidValid = Operations.BuildBrushOperation.ValidateGeneratedFaces(
                             solidFaces.Select(x => (IReadOnlyList<Vector3>)x.Vertices).ToList(),
-                            out var validationReason))
+                            out var validationReason);
+                        solidValidity.Add(solidValid);
+                        if (!solidValid)
                         {
                             allSolidsValid = false;
                             if (!string.IsNullOrEmpty(validationReason))
@@ -423,11 +426,10 @@ namespace HammerTime.BrushBuilder.Tools
                         }
                     }
 
-                    foreach (var solidFaces in generatedSolids)
+                    for (int si = 0; si < generatedSolids.Count; si++)
                     {
-                        bool isSegmentValid = Operations.BuildBrushOperation.ValidateGeneratedFaces(
-                            solidFaces.Select(x => (IReadOnlyList<Vector3>)x.Vertices).ToList(),
-                            out _);
+                        var solidFaces = generatedSolids[si];
+                        bool isSegmentValid = solidValidity[si];
 
                         foreach (var generatedFace in solidFaces)
                         {
